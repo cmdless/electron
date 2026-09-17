@@ -1,0 +1,17 @@
+{
+  "name": "@cmdless/electron",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "rimraf": "6.1.3"
+  }
+}

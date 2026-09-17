@@ -1,0 +1,36 @@
+{
+  "name": "@cmdless/ui-sdk",
+  "description": "Build cross platform desktop apps built on Electron.",
+  "version": "0.0.2",
+  "license": "MIT",
+  "type": "module",
+  "author": {
+    "name": "Fluttershy",
+    "url": "https://github.com/Fluttershy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cmdless/electron.git"
+  },
+  "exports": {
+    "./main": {
+      "types": "./dist/main/index.d.ts",
+      "import": "./dist/main/index.js"
+    },
+    "./renderer": {
+      "types": "./dist/renderer/index.d.ts",
+      "import": "./dist/renderer/index.js"
+    },
+    "./shared": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "rimraf dist node_modules/.tmp",
+    "build": "tsc -b",
+    "test": "node --test --import tsx src/**/*.test.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

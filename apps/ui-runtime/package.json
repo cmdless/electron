@@ -1,0 +1,33 @@
+{
+  "name": "@cmdless/ui-runtime",
+  "description": "Runtime that wraps Electron convenience UI.",
+  "version": "0.0.2",
+  "license": "MIT",
+  "type": "module",
+  "author": {
+    "name": "Fluttershy",
+    "url": "https://github.com/Fluttershy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cmdless/platform.git"
+  },
+  "bin": {
+    "ui-runtime": "./dist/bin.js"
+  },
+  "scripts": {
+    "prebuild": "rimraf dist node_modules/.tmp",
+    "build": "tsc -b && electron-vite build",
+    "test": "node --test --import tsx src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "commander": "15.0.0",
+    "@cmdless/ui-sdk": "*"
+  },
+  "devDependencies": {
+    "electron": "43.3.0",
+    "electron-vite": "^5.0.0",
+    "vite": "^7.3.6"
+  }
+}
