@@ -13,17 +13,19 @@
     "url": "git+https://github.com/cmdless/platform.git"
   },
   "bin": {
-    "ui-runtime": "./dist/bin.js"
+    "ui-runtime": "./out/main/bin.js"
   },
   "scripts": {
     "prebuild": "rimraf dist node_modules/.tmp",
-    "build": "tsc -b && electron-vite build",
+    "build": "electron-vite build",
     "test": "node --test --import tsx src/**/*.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "commander": "15.0.0",
-    "@cmdless/ui-sdk": "*"
+    "@electron-toolkit/utils": "4.0.0",
+    "@cmdless/ui-sdk": "*",
+    "@cmdless/ensure-electron": "0.0.5"
   },
   "devDependencies": {
     "electron": "43.3.0",
