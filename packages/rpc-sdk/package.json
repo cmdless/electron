@@ -1,6 +1,6 @@
 {
-  "name": "@cmdless/ui-sdk",
-  "description": "Build cross platform desktop apps built on Electron.",
+  "name": "@cmdless/rpc-sdk",
+  "description": "RPC SDK: Allows defining an RPC protocol once, requiring only a connection to create peers of either side. Built on top of vscode-jsonrpc.",
   "version": "0.0.2",
   "license": "MIT",
   "type": "module",
@@ -21,6 +21,10 @@
       "types": "./dist/browser/index.d.ts",
       "import": "./dist/browser/index.js"
     },
+    "./ws": {
+      "types": "./dist/ws/index.d.ts",
+      "import": "./dist/ws/index.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -37,7 +41,8 @@
     "test": "node --test --import tsx src/**/*.test.ts"
   },
   "dependencies": {
-    "@cmdless/rpc-sdk": "*"
+    "vscode-jsonrpc": "9.0.2",
+    "vscode-ws-jsonrpc": "3.5.0"
   },
   "devDependencies": {}
 }

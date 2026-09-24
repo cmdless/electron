@@ -15,6 +15,11 @@
   "bin": {
     "ui-runtime": "./dist/bin.js"
   },
+  "files": [
+    "dist/",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "prebuild": "rimraf dist node_modules/.tmp",
     "build": "tsc -b",

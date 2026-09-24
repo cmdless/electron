@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { runAsPackage, runAsRuntime } from '@cmdless/ui-sdk/main';
+import { runAsPackage, runAsRuntime } from '@cmdless/ui-sdk/node';
 
 const program = new Command();
 

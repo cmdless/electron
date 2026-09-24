@@ -15,6 +15,11 @@
   "bin": {
     "ui-runtime": "./out/main/bin.js"
   },
+  "files": [
+    "out/",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
     "prebuild": "rimraf dist node_modules/.tmp",
     "build": "electron-vite build",

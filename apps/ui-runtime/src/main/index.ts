@@ -1,19 +1,36 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, shell, BrowserWindow, dialog } from 'electron';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
-import { Argument, Command, Option } from 'commander';
-import * as types from '@cmdless/ui-sdk/shared';
+import { Argument, Command } from 'commander';
+import { cmdlessProtocol, createElectronIPC, types } from '@cmdless/ui-sdk';
+import { getEphemeralPrefix, CmdlessEnv, CmdlessUI, binOutput } from '@cmdless/ui-sdk/node';
+import type { BinResolve, BinCleanup } from '@cmdless/ui-sdk/node';
+import { asElectronIPC } from '@cmdless/rpc-sdk';
+
+// the default outer-most resolve which also produces an exit code
+if (!process.send) throw new Error('main entry must be launched with an ipc channel');
+let resolved = false;
+function resolve<T>(value: T, exitCode = 0) {
+  if (resolved) return;
+  resolved = true;
+  const message: BinResolve = { type: 'resolve', value };
+  process.send?.(message, e => app.exit(e ? 1 : exitCode));
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = path.join(__dirname, '../preload/index.mjs');
 
-async function createWindow({ type, source, width, height }: types.ShowParams, finish = resolve) {
+async function createWindow(parameters: types.ShowParams, finish = resolve, parent?: BrowserWindow) {
+  const { app, address, type, source, width, height } = parameters;
+
   const win = new BrowserWindow({
-    width,
-    height,
+    parent,
+    width: width ?? 900,
+    height: height ?? 670,
     show: false,
     autoHideMenuBar: true,
+    title: app,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -22,16 +39,36 @@ async function createWindow({ type, source, width, height }: types.ShowParams, f
     }
   });
 
-  //TODO: global handlers for cmdless preload
-  ipcMain.on('ping', () => console.log('pong'));
+  const ui = new CmdlessUI(parameters =>
+    new Promise<string>((resolve, reject) => {
+      try {
+        handle(parameters, (value, exitCode = 0) => {
+          if (exitCode !== 0) {
+            reject(new Error(`UI command exited with code ${exitCode}`));
+            return;
+          }
+          resolve(binOutput(value));
+        }, win);
+      } catch (error) {
+        reject(error);
+      }
+    }));
+
+  const ipc = cmdlessProtocol.createServer(createElectronIPC(asElectronIPC(win.webContents.ipc, win.webContents)));
+  ipc.onNotification.resolve(({ value, exitCode }) => finish(value, exitCode));
+  ipc.onRequest.ui(parameters => ui.run(parameters));
+
+  if (address) {
+    const token = CmdlessEnv.token;
+    // establish connection once
+  }
 
   // ensure window always resolves
-  win.on('closed', () => finish({}, 1));
-  win.webContents.ipc.on('cmdless:resolve', (_, result, exitCode) => {
-    finish(result, exitCode);
+  win.on('closed', () => finish(null));
+  win.on('ready-to-show', () => {
+    ipc.listen();
+    win.show();
   });
-
-  win.on('ready-to-show', () => win.show());
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
@@ -46,19 +83,48 @@ async function createWindow({ type, source, width, height }: types.ShowParams, f
   return win;
 }
 
-function setup(parameters: types.SetupParams, factory: () => void) {
-  // Set app user model id for windows
-  electronApp.setAppUserModelId('dev.cmdless.ui');
-
-  if (parameters.address && parameters.token) {
-    // establish connection once
+function handle(parameters: types.Params, finish = resolve, parent?: BrowserWindow) {
+  switch (parameters.kind) {
+    case 'show':
+      createWindow(parameters, finish, parent);
+      break;
+    case 'message-box':
+      const messageBox = parent
+        ? dialog.showMessageBox(parent, parameters)
+        : dialog.showMessageBox(parameters);
+      messageBox.then(finish);
+      break;
+    default: throw new Error(`Unsupported kind: ${JSON.stringify(parameters, null, 2)}`);
   }
-
-  factory();
 }
 
-function setupWindow(parameters: types.ShowParams, finish = resolve) {
-  const factory = () => createWindow(parameters, finish);
+async function run(parameters: types.Params, finish = resolve) {
+  // --app <name> takes precedence, otherwise ephemeral
+  const appName = parameters.app || `${getEphemeralPrefix()}${crypto.randomUUID()}`;
+
+  parameters.app = appName;
+
+  app.setName(appName);
+  app.setPath('userData', path.join(app.getPath('appData'), appName));
+
+  if (appName.startsWith(getEphemeralPrefix())) {
+    const message: BinCleanup = { type: 'cleanup', appName, userData: app.getPath('userData') };
+    process.send?.(message);
+  }
+
+  // ephemeral is unique so, might as well always run this to acquire named app lock
+  if (!app.requestSingleInstanceLock()) {
+    finish(null, 1);
+    return;
+  }
+
+  // This method will be called when Electron has finished
+  // initialization and is ready to create browser windows.
+  // Some APIs can only be used after this event occurs.
+  await app.whenReady();
+
+  // Set app user model id for windows
+  electronApp.setAppUserModelId('dev.cmdless.ui');
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
@@ -67,50 +133,10 @@ function setupWindow(parameters: types.ShowParams, finish = resolve) {
     optimizer.watchWindowShortcuts(window);
   });
 
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) factory();
-  });
+  app.on('window-all-closed', () => finish(null));
 
-  setup(parameters, factory);
+  handle(parameters, finish);
 }
-
-let resolved = false;
-function resolve<T>(value: T, exitCode = 0) {
-  if (resolved) return;
-  resolved = true;
-  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
-  process.stdout.write(serialized, e => app.exit(e ? 1 : exitCode));
-}
-
-function handle(parameters: types.Params, finish = resolve) {
-  if (parameters.address)
-    parameters.token = process.env.CMDLESS_TOKEN;
-  switch (parameters.kind) {
-    case 'show':
-      setupWindow(parameters, finish);
-      break;
-    case 'message-box':
-      setup(parameters, () => dialog.showMessageBox(parameters).then(finish));
-      break;
-    default: throw new Error(`Unsupported kind: ${JSON.stringify(parameters, null, 2)}`);
-  }
-}
-
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
-const whenReady = app.whenReady();
-
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
 
 // CLI entry
 function cli() {
@@ -120,20 +146,20 @@ function cli() {
     .command('show').description('Show content inside of an Electron browser window')
     .addArgument(new Argument('<type>', 'Source type to show in the window').choices(types.ShowTypes))
     .argument('<source>', 'File or URL to open in the window')
-    .option('--width <number>', 'Width of the window', Number, 900)
-    .option('--height <number>', 'Height of the window', Number, 670)
+    .option('--app <name>', 'App name, used to group processes and parent windows and dialogs')
+    .option('--width <number>', 'Width of the window', Number)
+    .option('--height <number>', 'Height of the window', Number)
     .option('--address <address>', 'Backend address')
-    .action((type, source, options: types.ShowOptions) => handle({ kind: 'show', type, source, ...options }));
+    .action((type, source, options: types.ShowOptions) => run({ kind: 'show', type, source, ...options }));
 
   program
-    .command('message-box').description('Display a simple message box')
+    .command('message-box').description('Display a simple Electron message box')
+    .addArgument(new Argument('<type>', 'Type of message').choices(types.MessageBoxTypes).default('none'))
     .argument('<message>', 'Message to display in the message box')
-    .addOption(new Option('--type <type>', 'Type of message ').choices(types.MessageBoxTypes).default('none'))
-    .option('--address <address>', 'Backend address')
-    .action((message, options: types.MessageBoxOptions) => handle({ kind: 'message-box', message, ...options }));
+    .option('--app <name>', 'App name, used to group processes and parent windows and dialogs')
+    .action((type, message, options: types.MessageBoxOptions) => run({ kind: 'message-box', type, message, ...options }));
 
   return program;
 }
 
-await whenReady;
 await cli().parseAsync();

@@ -3,6 +3,15 @@
   "references": [
     {
       "path": "./packages/ui-sdk"
+    },
+    {
+      "path": "./packages/rpc-sdk"
+    },
+    {
+      "path": "./apps/ui"
+    },
+    {
+      "path": "./apps/ui-runtime"
     }
   ]
 }

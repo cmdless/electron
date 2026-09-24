@@ -1,46 +1,37 @@
-export type SetupOptions = {
-  address?: string;
+import { defineProtocol, forElectronIPC } from '@cmdless/rpc-sdk';
+import { Params } from './types.js';
+
+export * from './emitter.js';
+export * as types from './types.js';
+
+export interface CmdlessState {
+  node: boolean;
 };
 
-export type SetupParams = SetupOptions & {
-  token?: string;
+type ResolveParams<T = unknown> = {
+  value: T;
+  exitCode?: number;
 };
 
-export type ShowOptions = SetupParams & {
-  width: number;
-  height: number;
+export const cmdlessProtocol = defineProtocol(({ side, request, notification }) => ({
+  clientToServer: side({
+    requests: {
+      state: request<void, CmdlessState>('state'),
+      ui: request<Params, string>('ui'),
+    },
+    notifications: {
+      resolve: notification<ResolveParams>('resolve'),
+    },
+  }),
+  serverToClient: side({
+    notifications: {
+      state: notification<CmdlessState>('state'),
+    },
+  }),
+}));
+
+export const createElectronIPC = forElectronIPC('cmdless:rpc');
+
+export type Cmdless = {
+  ipc: ReturnType<typeof cmdlessProtocol.createClient>;
 };
-
-export const ShowTypes = ['url', 'file'] as const;
-export type ShowType = typeof ShowTypes[number];
-export type ShowParams = ShowOptions & {
-  kind: 'show';
-  type: ShowType;
-  source: string;
-};
-
-export const MessageBoxTypes = ['none', 'info', 'error', 'question', 'warning'] as const;
-export type MessageBoxType = typeof MessageBoxTypes[number];
-export type MessageBoxOptions = SetupParams & {
-  type: MessageBoxType;
-};
-
-export type MessageBoxParams = MessageBoxOptions & {
-  kind: 'message-box';
-  message: string;
-};
-
-export type Params =
-  | ShowParams
-  | MessageBoxParams;
-
-export interface Cmdless {
-  invoke<T = unknown>(
-    method: string,
-    args?: unknown
-  ): Promise<T>;
-  resolve<T = unknown>(
-    value: T,
-    exitCode?: number
-  ): void;
-}
