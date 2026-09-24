@@ -24,5 +24,6 @@ jobs:
       - run: npm ci
       - run: npm run build --if-present
       - run: cp LICENSE packages/ui-sdk/LICENSE
+      - run: node .github/scripts/pin-workspace-deps.mjs packages/ui-sdk/package.json --range
       - run: npm pack --dry-run --workspace=@cmdless/ui-sdk
       - run: npm publish --workspace=@cmdless/ui-sdk # Or: npm stage publish

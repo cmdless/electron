@@ -1,7 +1,7 @@
 {
   "name": "@cmdless/ui-runtime",
   "description": "Runtime that wraps Electron convenience UI.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "license": "MIT",
   "type": "module",
   "author": {

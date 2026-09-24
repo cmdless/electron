@@ -1,7 +1,7 @@
 {
   "name": "@cmdless/ui-sdk",
   "description": "Build cross platform desktop apps built on Electron.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "license": "MIT",
   "type": "module",
   "author": {
