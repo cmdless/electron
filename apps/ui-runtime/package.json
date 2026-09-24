@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cmdless/platform.git"
+    "url": "git+https://github.com/cmdless/electron.git"
   },
   "bin": {
     "ui-runtime": "./out/main/bin.js"
