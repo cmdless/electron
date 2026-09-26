@@ -23,7 +23,7 @@
   "scripts": {
     "prebuild": "rimraf dist node_modules/.tmp",
     "build": "tsc -b",
-    "test": "node --test --import tsx src/**/*.test.ts"
+    "test": "node ../../scripts/run-tests.mjs"
   },
   "dependencies": {
     "commander": "15.0.0",

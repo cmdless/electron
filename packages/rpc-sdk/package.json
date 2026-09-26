@@ -25,6 +25,10 @@
       "types": "./dist/ws/index.d.ts",
       "import": "./dist/ws/index.js"
     },
+    "./ws/node": {
+      "types": "./dist/ws/node/index.d.ts",
+      "import": "./dist/ws/node/index.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -38,11 +42,14 @@
   "scripts": {
     "prebuild": "rimraf dist node_modules/.tmp",
     "build": "tsc -b",
-    "test": "node --test --import tsx src/**/*.test.ts"
+    "test": "node ../../scripts/run-tests.mjs"
   },
   "dependencies": {
     "vscode-jsonrpc": "9.0.2",
-    "vscode-ws-jsonrpc": "3.5.0"
+    "vscode-ws-jsonrpc": "3.5.0",
+    "ws": "8.21.3"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/ws": "8.5.13"
+  }
 }

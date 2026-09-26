@@ -46,6 +46,11 @@ export function getPackageName(specifier: string) {
     const packageName = specifier.substring(0, lastAtIndex);
     const packageVersion = specifier.substring(lastAtIndex + 1);
 
+    // "latest" is a moving target, not a real pinned version - treat it as
+    // if no version was given at all, so it resolves (and caches) for real.
+    if (packageVersion.toLowerCase() === 'latest')
+      return { packageName };
+
     return { packageName, packageVersion };
   }
   return { packageName: specifier };
@@ -76,7 +81,7 @@ export type PackageInstallParams = {
 
 export async function ensurePackage(parameters: PackageInstallParams) {
   const { packageName, version, prefix, cmdlessRoot } = await getPrefix(parameters);
-  if (!fs.existsSync(path.join(prefix, 'node_modules')))
+  if (!fs.existsSync(path.join(prefix, 'node_modules', packageName, 'package.json')))
     execFileSync("npm", ["install", "--prefix", prefix, `${packageName}@${version}`]);
   return { packageName, prefix, cmdlessRoot };
 }

@@ -73,11 +73,15 @@ Types flow end to end: the `params`/`result` types for `ping` above come straigh
 ## Transports
 
 - **`@cmdless/rpc-sdk/browser`** — `createBrowser(source, target?)` wraps `vscode-jsonrpc/browser`'s `BrowserMessageReader`/`BrowserMessageWriter` around anything shaped like a `postMessage`/`addEventListener('message')` endpoint into a `MessageConnection`. Fits a `Worker`, a `MessagePort`, or a WebView2 message bridge. Pass one endpoint if it serves as both source and target, or a separate source/target pair.
+  `connectBrowser(protocol, source, target?)` — same endpoint(s), but returns a ready-to-use **client peer** directly (`protocol.createClient(createBrowser(...))`). No waiting involved — unlike a WebSocket/TCP connection, `postMessage`-based endpoints queue messages automatically, there's no "not open yet" state to wait out.
 
   ```ts
-  import { createBrowser } from '@cmdless/rpc-sdk/browser';
+  import { createBrowser, connectBrowser } from '@cmdless/rpc-sdk/browser';
+  import { myProtocol } from './protocol.js';
 
   const connection = createBrowser(self); // e.g. inside a Worker
+  const client = connectBrowser(myProtocol, self);
+  client.listen();
   ```
 
 - **`@cmdless/rpc-sdk/node`** — every helper here builds a `MessageConnection` from an explicit `vscode-jsonrpc/node` reader/writer pair chosen for that specific transport, rather than a one-size-fits-all path, since the different Node transports aren't just "bytes with different cleanup" — IPC and worker ports are already message-framed, not raw byte streams like plain streams/sockets are.
@@ -87,32 +91,70 @@ Types flow end to end: the `params`/`result` types for `ping` above come straigh
   - `createSocket(socket)` — a `net.Socket`, via `SocketMessageReader`/`SocketMessageWriter`, which dispose of the connection correctly (closing the socket) unlike the generic stream writer.
   - `createIPC(target)` — a `ChildProcess` or `NodeJS.Process`, via `IPCMessageReader`/`IPCMessageWriter`, built on `process.send()`/`'message'` events (e.g. the channel between a Node parent and a `child_process.spawn(..., { stdio: [..., 'ipc'] })` child).
   - `createPort(port)` — a `MessagePort` or `Worker` from `node:worker_threads`, via `PortMessageReader`/`PortMessageWriter`.
+  - `startStdio({ protocol, configure? })` — `createStdio()` is the *server* side of a stdio transport (a spawned process's own stdin/stdout, same convention as LSP-over-stdio); this creates the server peer, runs `configure`, and calls `.listen()` for you. Unlike `startWebSocket`, this returns the **peer itself**, not a separate handle — stdio only ever has exactly one peer for its whole lifetime, there's no accept phase to hand back a handle for.
+  - `connectStdio(protocol, { command, args? })` — the client side: spawns `command`, wraps its stdout/stdin from the outside, and returns a ready **client peer** (call `.listen()` yourself when ready, same as `connectWebSocket` — no `configure` needed since you already have the peer to register handlers on directly). Disposing the returned peer's connection also kills the spawned process. Deliberately doesn't expose the full `SpawnOptions` surface — some of those need to stay fixed (e.g. `stdio: ['pipe', 'pipe', 'inherit']`) for the wiring to work at all.
+  - `startSocket({ protocol, configure?, options? })` — a plain `net.Server`: creates it, calls `.listen(options)` (`options` are `net.ListenOptions`, e.g. `{ port: 9000 }`), and for every accepted `net.Socket` wraps it via `createSocket`, creates a server peer, runs `configure`, and calls `.listen()` for you — same shape as `startWebSocket`, returning the server handle since many peers can connect over its lifetime.
+  - `connectSocket(protocol, options)` — the client side: `net.createConnection(options)` (`options` are `net.NetConnectOpts`, e.g. `{ port: 9000, host: 'localhost' }` or `{ path: '/tmp/my.sock' }`), waits for `'connect'`, and returns a ready **client peer** (same "you call `.listen()`" convention as `connectStdio`/`connectWebSocket`).
 
   ```ts
-  import { createStdio } from '@cmdless/rpc-sdk/node';
+  import { createStdio, startStdio, connectStdio } from '@cmdless/rpc-sdk/node';
+  import { myProtocol } from './protocol.js';
 
-  const connection = createStdio(); // process.stdin / process.stdout
+  const connection = createStdio(); // process.stdin / process.stdout, wrapped directly
+
+  // or, as the server side of a protocol:
+  const server = await startStdio({
+    protocol: myProtocol,
+    configure(peer) { peer.onRequest.ping(async () => ({ ok: true })); },
+  });
+
+  // and from whoever spawns that process:
+  const client = connectStdio(myProtocol, { command: 'my-server', args: ['--flag'] });
+  client.listen();
   ```
 
-- **`@cmdless/rpc-sdk/ws`** — for the standard `WebSocket` (available in both browsers and modern Node), via `vscode-ws-jsonrpc`'s `WebSocketMessageReader`/`WebSocketMessageWriter`.
+- **`@cmdless/rpc-sdk/ws`** — for the standard `WebSocket`. `vscode-ws-jsonrpc`'s `toSocket`/`WebSocketMessageReader`/`WebSocketMessageWriter` only ever touch `send`/`onmessage`/`onerror`/`onclose`/`close` — the same shape both a real browser `WebSocket` and the `ws` package's `WebSocket` class provide — so this one module works from either a browser and a Node process connecting *out*, or (once added) a Node server wrapping an *accepted* connection.
 
-  - `createWebSocket(socket)` — wraps an already-open `WebSocket`.
+  - `createWebSocket(socket)` — wraps an already-open `WebSocket` (browser or `ws`) into a `MessageConnection`.
   - `waitForOpen(socket)` — resolves once a connecting socket reaches `OPEN` (or rejects on error/if it's already closed/closing).
-  - `connectWebSocket(factory)` — `createWebSocket(await waitForOpen(await factory()))` in one call; `factory` can return a `WebSocket` or a `Promise<WebSocket>`.
+  - `connectWebSocket(protocol, { url, protocols? })` — creates `new WebSocket(url, protocols)` (the same global constructor in a browser and in modern Node — no environment branching needed), waits for it to open, and returns a ready-to-use **client peer** (call `.listen()` yourself when ready, same convention as `connectStdio`/`connectSocket`).
 
   ```ts
   import { connectWebSocket } from '@cmdless/rpc-sdk/ws';
+  import { myProtocol } from './protocol.js';
 
-  const connection = await connectWebSocket(() => new WebSocket('wss://example.test'));
+  const client = await connectWebSocket(myProtocol, { url: 'wss://example.test' });
+  client.listen();
   ```
 
   Kept as its own export rather than in the shared root module so that consumers who never touch WebSockets don't pull in `vscode-ws-jsonrpc` at all.
+
+- **`@cmdless/rpc-sdk/ws/node`** — the server-listening side, built on the `ws` package. Node-only (unlike `@cmdless/rpc-sdk/ws`, which is safe from a browser too) — this is the one place that actually needs `ws` at runtime, not just its types.
+
+  - `startWebSocket({ protocol, configure?, options? })` — starts a `ws` `WebSocketServer` (`options` are `ws`'s own `ServerOptions`, e.g. `{ port: 8080 }`), resolving once it's actually listening (see `waitForListening` below), and for every accepted connection: wraps it via `createWebSocket` from `@cmdless/rpc-sdk/ws`, creates a server peer with `protocol.createServer(connection)`, calls your `configure(peer)` hook to register `onRequest`/`onNotification` handlers, then calls `peer.listen()` for you.
+  - `waitForListening(server)` — resolves once the server is actually ready to accept connections, reading `server.options` to pick the right signal: immediately for `noServer: true` (nothing to bind), immediately if an externally-provided `server` is already listening, otherwise waiting for that external server's (or `ws`'s own) `'listening'` event — rejecting on `'error'` in the waiting case.
+
+  ```ts
+  import { startWebSocket } from '@cmdless/rpc-sdk/ws/node';
+  import { myProtocol } from './protocol.js';
+
+  const server = await startWebSocket({
+    protocol: myProtocol,
+    options: { port: 8080 },
+    configure(peer) {
+      peer.onRequest.ping(async () => ({ ok: true }));
+    },
+  });
+  ```
+
+  `TransportParameters<P, Options>` (the `{ protocol, configure, options }` shape) is exported from the package root, not this module — it's meant to be reused by future "start a transport server" helpers beyond just WebSocket.
 
 ## Exports
 
 | Export | Contents |
 | --- | --- |
-| `@cmdless/rpc-sdk` | `defineProtocol` and the protocol/side/channel/peer types |
-| `@cmdless/rpc-sdk/browser` | `createBrowser` |
-| `@cmdless/rpc-sdk/node` | `createStream`, `createStdio`, `createSocket`, `createIPC`, `createPort` |
+| `@cmdless/rpc-sdk` | `defineProtocol`, the protocol/side/channel/peer types, and `TransportParameters` |
+| `@cmdless/rpc-sdk/browser` | `createBrowser`, `connectBrowser` |
+| `@cmdless/rpc-sdk/node` | `createStream`, `createStdio`, `createSocket`, `createIPC`, `createPort`, `startStdio`, `connectStdio`, `startSocket`, `connectSocket` |
 | `@cmdless/rpc-sdk/ws` | `createWebSocket`, `waitForOpen`, `connectWebSocket` |
+| `@cmdless/rpc-sdk/ws/node` | `startWebSocket`, `waitForListening` |

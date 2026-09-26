@@ -74,6 +74,7 @@ export type RpcPeer<Channel extends RpcChannel = RpcChannel> = {
   onRequest: RequestHandlers<Channel['incoming']['requests']>;
   onNotification: NotificationHandlers<Channel['incoming']['notifications']>;
   listen: () => void;
+  dispose: () => void;
 };
 function peer<Channel extends RpcChannel>(
   { outgoing, incoming }: Channel,
@@ -109,7 +110,8 @@ function peer<Channel extends RpcChannel>(
     notify,
     onRequest,
     onNotification,
-    listen: () => connection.listen()
+    listen: () => connection.listen(),
+    dispose: () => connection.dispose()
   } as RpcPeer<Channel>;
 }
 

@@ -24,6 +24,7 @@ jobs:
       - run: npm ci
       - run: npm run build --if-present
       - run: cp LICENSE apps/ui-runtime/LICENSE
+      - run: node .github/scripts/verify-pack.mjs apps/ui-runtime/package.json
       - run: node .github/scripts/pin-workspace-deps.mjs apps/ui-runtime/package.json
       - run: npm pack --dry-run --workspace=@cmdless/ui-runtime
       - run: npm publish --workspace=@cmdless/ui-runtime # Or: npm stage publish

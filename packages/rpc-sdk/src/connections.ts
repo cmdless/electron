@@ -62,26 +62,22 @@ export function defineDuplexConnection<
 import { Disposable, AbstractMessageReader, AbstractMessageWriter } from 'vscode-jsonrpc';
 import type { DataCallback, Message } from 'vscode-jsonrpc';
 
-class CallbackMessageWriter extends AbstractMessageWriter {
-  constructor(private readonly send: DataCallback) {
-    super();
-  }
+type CallbackReceiver = {
+  subscribe: (callback: DataCallback) => () => void;
+};
 
-  write(message: Message) {
-    this.send(message);
-    return Promise.resolve();
-  }
-
-  end() { }
-}
+export type CallbackSender = {
+  send: DataCallback;
+  dispose?: () => void;
+};
 
 class CallbackMessageReader extends AbstractMessageReader {
   private callback?: DataCallback;
   private unsubscribe: Disposable;
 
-  constructor(subscribe: (callback: DataCallback) => () => void) {
+  constructor(receiver: CallbackReceiver) {
     super();
-    this.unsubscribe = Disposable.create(subscribe(message => this.callback?.(message)));
+    this.unsubscribe = Disposable.create(receiver.subscribe(message => this.callback?.(message)));
   }
 
   override listen(callback: DataCallback) {
@@ -94,6 +90,24 @@ class CallbackMessageReader extends AbstractMessageReader {
   override dispose(): void {
     super.dispose();
     this.unsubscribe.dispose();
+  }
+}
+
+class CallbackMessageWriter extends AbstractMessageWriter {
+  constructor(private readonly sender: CallbackSender) {
+    super();
+  }
+
+  write(message: Message) {
+    this.sender.send(message);
+    return Promise.resolve();
+  }
+
+  end() { }
+
+  override dispose() {
+    super.dispose();
+    this.sender.dispose?.();
   }
 }
 
@@ -129,12 +143,16 @@ export function asElectronIPC(receiver: ElectronIPCReceiver, sender: ElectronIPC
 
 export function forElectronIPC<T extends ElectronIPCLike>(channel: string) {
   return splitSourceFor(createCallback)<T>(
-    source => callback => {
-      const listener = (_event: unknown, message: Message) => callback(message);
-      source.on(channel, listener);
-      return () => source.off(channel, listener);
-    },
-    source => message => source.send(channel, message),
+    source => ({
+      subscribe: callback => {
+        const listener = (_event: unknown, message: Message) => callback(message);
+        source.on(channel, listener);
+        return () => source.off(channel, listener);
+      }
+    }),
+    source => ({
+      send: message => source.send(channel, message),
+    }),
   );
 }
 
