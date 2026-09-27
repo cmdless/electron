@@ -1,7 +1,7 @@
 {
   "name": "@cmdless/ui-sdk",
   "description": "Build cross platform desktop apps built on Electron.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "license": "MIT",
   "type": "module",
   "author": {
@@ -37,7 +37,8 @@
     "test": "node ../../scripts/run-tests.mjs"
   },
   "dependencies": {
-    "@cmdless/rpc-sdk": "*"
+    "@cmdless/rpc-sdk": "*",
+    "vscode-jsonrpc": "9.0.2"
   },
   "devDependencies": {}
 }

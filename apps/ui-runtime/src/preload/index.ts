@@ -1,7 +1,7 @@
-import { cmdlessProtocol, createElectronIPC, type Cmdless } from '@cmdless/ui-sdk';
+import { cmdlessIPC, createElectronIPC, type Cmdless } from '@cmdless/ui-sdk';
 import { contextBridge, ipcRenderer } from 'electron';
 
-const ipc = cmdlessProtocol.createClient(createElectronIPC(ipcRenderer));
+const ipc = cmdlessIPC.createClient(createElectronIPC(ipcRenderer));
 const cmdless: Cmdless = { ipc };
 
 contextBridge.exposeInMainWorld('cmdless', cmdless);

@@ -3,19 +3,26 @@ import { fileURLToPath } from 'node:url';
 import { app, shell, BrowserWindow, dialog } from 'electron';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import { Argument, Command } from 'commander';
-import { cmdlessProtocol, createElectronIPC, types } from '@cmdless/ui-sdk';
-import { getEphemeralPrefix, CmdlessEnv, CmdlessUI, binOutput } from '@cmdless/ui-sdk/node';
+import { cmdlessIPC, createElectronIPC, types } from '@cmdless/ui-sdk';
+import { getEphemeralPrefix, CmdlessEnv, CmdlessUI, binOutput, MessageSocketWaiter, BinChannel } from '@cmdless/ui-sdk/node';
 import type { BinResolve, BinCleanup } from '@cmdless/ui-sdk/node';
 import { asElectronIPC } from '@cmdless/rpc-sdk';
 
+// Electron's main-process 'ready' event only fires once this entry module
+// finishes loading - top-level awaiting anything that itself (directly or
+// transitively) waits on app.whenReady() deadlocks the whole app, since the
+// module can never "finish" while it's still awaiting readiness.
+// See https://github.com/electron/electron/issues/40719.
+let send: (message: BinResolve | BinCleanup) => void;
+
 // the default outer-most resolve which also produces an exit code
-if (!process.send) throw new Error('main entry must be launched with an ipc channel');
 let resolved = false;
 function resolve<T>(value: T, exitCode = 0) {
   if (resolved) return;
   resolved = true;
   const message: BinResolve = { type: 'resolve', value };
-  process.send?.(message, e => app.exit(e ? 1 : exitCode));
+  send(message);
+  app.exit(exitCode);
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -54,21 +61,15 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
       }
     }));
 
-  const ipc = cmdlessProtocol.createServer(createElectronIPC(asElectronIPC(win.webContents.ipc, win.webContents)));
+  const ipc = cmdlessIPC.createServer(createElectronIPC(asElectronIPC(win.webContents.ipc, win.webContents)));
   ipc.onNotification.resolve(({ value, exitCode }) => finish(value, exitCode));
   ipc.onRequest.ui(parameters => ui.run(parameters));
-
-  if (address) {
-    const token = CmdlessEnv.token;
-    // establish connection once
-  }
+  ipc.onRequest.connectionInfo(() => ({ address, windowId: win.id }));
+  ipc.listen();
 
   // ensure window always resolves
   win.on('closed', () => finish(null));
-  win.on('ready-to-show', () => {
-    ipc.listen();
-    win.show();
-  });
+  win.on('ready-to-show', () => win.show());
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url);
@@ -84,6 +85,9 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
 }
 
 function handle(parameters: types.Params, finish = resolve, parent?: BrowserWindow) {
+  if (!parent && parameters.parent)
+    parent = BrowserWindow.fromId(parameters.parent) ?? undefined;
+
   switch (parameters.kind) {
     case 'show':
       createWindow(parameters, finish, parent);
@@ -100,23 +104,36 @@ function handle(parameters: types.Params, finish = resolve, parent?: BrowserWind
 
 async function run(parameters: types.Params, finish = resolve) {
   // --app <name> takes precedence, otherwise ephemeral
-  const appName = parameters.app || `${getEphemeralPrefix()}${crypto.randomUUID()}`;
-
-  parameters.app = appName;
+  const appName = parameters.app || CmdlessEnv.app || `${getEphemeralPrefix()}${crypto.randomUUID()}`;
+  parameters.app = CmdlessEnv.app = appName;
 
   app.setName(appName);
   app.setPath('userData', path.join(app.getPath('appData'), appName));
 
+  // userData above must be set first - this reports whatever it resolves
+  // to, so it has to run after, not before.
   if (appName.startsWith(getEphemeralPrefix())) {
     const message: BinCleanup = { type: 'cleanup', appName, userData: app.getPath('userData') };
-    process.send?.(message);
+    send(message);
   }
 
-  // ephemeral is unique so, might as well always run this to acquire named app lock
-  if (!app.requestSingleInstanceLock()) {
-    finish(null, 1);
-    return;
+  const waiter = new MessageSocketWaiter<{ value: any, exitCode: number }>().start();
+  const additionalData = { ...parameters, id: waiter.id };
+
+  // if userData is already in use, wait for the owning process to return the result
+  if (!app.requestSingleInstanceLock(additionalData)) {
+    return waiter.withResult(message => finish(message.value, message.exitCode));
   }
+
+  // we own this instance; setup cleanup and stop the waiter
+  waiter.stop();
+
+  // forward parameters from external processes that end up with the same userData
+  app.on('second-instance', (_, __, ___, data: unknown) => {
+    const { id, ...parameters } = (data as typeof additionalData);
+    const resolve = waiter.connect(id);
+    handle(parameters, (value, exitCode = 0) => resolve({ value, exitCode }));
+  });
 
   // This method will be called when Electron has finished
   // initialization and is ready to create browser windows.
@@ -147,6 +164,7 @@ function cli() {
     .addArgument(new Argument('<type>', 'Source type to show in the window').choices(types.ShowTypes))
     .argument('<source>', 'File or URL to open in the window')
     .option('--app <name>', 'App name, used to group processes and parent windows and dialogs')
+    .option('--parent <id>', 'ID of the Electron Browsser Window to use as the parent for the window', Number)
     .option('--width <number>', 'Width of the window', Number)
     .option('--height <number>', 'Height of the window', Number)
     .option('--address <address>', 'Backend address')
@@ -157,9 +175,28 @@ function cli() {
     .addArgument(new Argument('<type>', 'Type of message').choices(types.MessageBoxTypes).default('none'))
     .argument('<message>', 'Message to display in the message box')
     .option('--app <name>', 'App name, used to group processes and parent windows and dialogs')
+    .option('--parent <id>', 'ID of the Electron Browsser Window to use as the parent for the dialog', Number)
     .action((type, message, options: types.MessageBoxOptions) => run({ kind: 'message-box', type, message, ...options }));
 
   return program;
 }
 
-await cli().parseAsync();
+async function main() {
+  send = await BinChannel.connect();
+
+  // without this, Ctrl+C leaves Electron's own default (uncontrolled)
+  // teardown to tear down windows - which can fire win 'closed' -> resolve()
+  // -> send() *after* the channel's connection has already started closing.
+  // `.on`, not `.once` (resolve() is itself idempotent) - see the comment on
+  // forwardSignals in ui-sdk/node/utils.ts for why a single delivery can't
+  // be assumed.
+  process.on('SIGINT', () => resolve(null));
+  process.on('SIGTERM', () => resolve(null));
+
+  await cli().parseAsync();
+}
+
+void main().catch(error => {
+  console.error(error);
+  app.exit(1);
+});

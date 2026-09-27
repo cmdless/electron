@@ -1,6 +1,6 @@
 export type SetupOptions = {
   app?: string;
-  parent?: string;
+  parent?: number;
 };
 
 export type SetupParams = SetupOptions & {};

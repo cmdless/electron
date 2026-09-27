@@ -13,11 +13,17 @@ type ResolveParams<T = unknown> = {
   exitCode?: number;
 };
 
-export const cmdlessProtocol = defineProtocol(({ side, request, notification }) => ({
+export type ConnectionInfo = {
+  address?: string;
+  windowId: number;
+};
+
+export const cmdlessIPC = defineProtocol(({ side, request, notification }) => ({
   clientToServer: side({
     requests: {
       state: request<void, CmdlessState>('state'),
       ui: request<Params, string>('ui'),
+      connectionInfo: request<void, ConnectionInfo>('connectionInfo'),
     },
     notifications: {
       resolve: notification<ResolveParams>('resolve'),
@@ -33,5 +39,5 @@ export const cmdlessProtocol = defineProtocol(({ side, request, notification }) 
 export const createElectronIPC = forElectronIPC('cmdless:rpc');
 
 export type Cmdless = {
-  ipc: ReturnType<typeof cmdlessProtocol.createClient>;
+  ipc: ReturnType<typeof cmdlessIPC.createClient>;
 };

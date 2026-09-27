@@ -3,7 +3,7 @@ import { createMessageConnection } from 'vscode-jsonrpc';
 import type { EitherWebSocket } from './shared.js';
 import type { RpcProtocol, RpcPeer } from '../protocol.js';
 
-export async function waitForOpen<T extends EitherWebSocket>(socket: T) {
+export async function waitForWebSocketOpen<T extends EitherWebSocket>(socket: T) {
   if (socket.readyState === WebSocket.OPEN)
     return socket;
 
@@ -29,10 +29,16 @@ export function createWebSocket(socket: EitherWebSocket) {
   // `ws`-package socket has too, so this works correctly for either at runtime.
   const adapted = toSocket(socket as unknown as WebSocket);
 
-  return createMessageConnection(
+  const connection = createMessageConnection(
     new WebSocketMessageReader(adapted),
     new WebSocketMessageWriter(adapted),
   );
+  // unlike the Node socket transport (whose SocketMessageWriter.dispose()
+  // destroys the socket), vscode-ws-jsonrpc's WebSocketMessageWriter never
+  // closes the underlying socket - without this, disposing a peer leaves the
+  // raw connection (and the process) alive.
+  connection.onDispose(() => adapted.dispose());
+  return connection;
 }
 
 export type WebSocketConnectOptions = {
@@ -45,6 +51,6 @@ export async function connectWebSocket<P extends RpcProtocol>(
   options: WebSocketConnectOptions,
 ): Promise<RpcPeer<P['client']>> {
   const socket = new WebSocket(options.url, options.protocols);
-  await waitForOpen(socket);
+  await waitForWebSocketOpen(socket);
   return protocol.createClient(createWebSocket(socket));
 }

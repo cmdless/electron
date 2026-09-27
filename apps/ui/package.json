@@ -1,7 +1,7 @@
 {
   "name": "@cmdless/ui",
   "description": "Runtime that wraps Electron convenience UI.",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "license": "MIT",
   "type": "module",
   "author": {
@@ -13,7 +13,7 @@
     "url": "git+https://github.com/cmdless/electron.git"
   },
   "bin": {
-    "ui-runtime": "./dist/bin.js"
+    "ui": "./dist/bin.js"
   },
   "files": [
     "dist/",

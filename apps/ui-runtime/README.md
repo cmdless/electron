@@ -13,4 +13,4 @@ Both accept `--app <name>` to group windows/dialogs under one Electron app ident
 
 ## How it resolves
 
-Each invocation resolves to a single value (whatever the window or dialog produced) and exits. The wrapper CLI (`bin.ts`) talks to the actual Electron process over an `ipc` channel — not stdout — specifically so that anything Electron itself logs can't get mixed in with the value being returned.
+Each invocation resolves to a single value (whatever the window or dialog produced) and exits. The wrapper CLI (`bin.ts`) talks to the actual Electron process over a `BinChannel` (a small local-socket protocol from [`@cmdless/ui-sdk/node`](../../packages/ui-sdk)) — not stdout, and deliberately not Node's `child_process` `'ipc'` stdio channel either. `'ipc'` is a documented source of `app.whenReady()` hangs when combined with Electron ([electron/electron#17044](https://github.com/electron/electron/issues/17044)); a plain socket avoids that while still keeping anything Electron itself logs out of the value being returned.
