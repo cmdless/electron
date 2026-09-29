@@ -4,8 +4,8 @@ import { app, shell, BrowserWindow, dialog } from 'electron';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import { Argument, Command } from 'commander';
 import { cmdlessIPC, createElectronIPC, types } from '@cmdless/ui-sdk';
-import { getEphemeralPrefix, CmdlessEnv, CmdlessUI, binOutput, MessageSocketWaiter, BinChannel } from '@cmdless/ui-sdk/node';
-import type { BinResolve, BinCleanup } from '@cmdless/ui-sdk/node';
+import { getEphemeralPrefix, CmdlessEnv, CmdlessUI, binOutput, MessageSocketWaiter, BinChannel, runAsMcp } from '@cmdless/ui-sdk/node';
+import type { BinResolve, BinCleanup, McpHandle } from '@cmdless/ui-sdk/node';
 import { asElectronIPC } from '@cmdless/rpc-sdk';
 
 // Electron's main-process 'ready' event only fires once this entry module
@@ -27,6 +27,31 @@ function resolve<T>(value: T, exitCode = 0) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = path.join(__dirname, '../preload/index.mjs');
+
+// ui-runtime is a generic host - it never runs an app's own createApp
+// in-process (that lives in the app's own bin process, the one that invoked
+// createShowCommand), so there's no "self" shortcut here: every request,
+// including one from an app asking for its own tools, resolves the same
+// way. Cached per package so repeat requests (multiple windows/renderers,
+// or the same one reconnecting) reuse one subprocess instead of spawning a
+// fresh one each time.
+const mcpHandles = new Map<string, Promise<McpHandle>>();
+
+function getMcpAddress(packageName: string, version?: string): Promise<string> {
+  const key = `${packageName}@${version ?? ''}`;
+  let handle = mcpHandles.get(key);
+  if (!handle) {
+    handle = runAsMcp(import.meta, packageName, version);
+    handle.catch(() => mcpHandles.delete(key)); // don't cache a failed attempt
+    mcpHandles.set(key, handle);
+  }
+  return handle.then(({ address }) => address);
+}
+
+app.on('before-quit', () => {
+  for (const handle of mcpHandles.values())
+    handle.then(({ dispose }) => dispose()).catch(() => { });
+});
 
 async function createWindow(parameters: types.ShowParams, finish = resolve, parent?: BrowserWindow) {
   const { app, address, type, source, width, height } = parameters;
@@ -65,6 +90,8 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
   ipc.onNotification.resolve(({ value, exitCode }) => finish(value, exitCode));
   ipc.onRequest.ui(parameters => ui.run(parameters));
   ipc.onRequest.connectionInfo(() => ({ address, windowId: win.id }));
+  ipc.onRequest.mcpAddress(({ packageName, version }) =>
+    getMcpAddress(packageName, version).then(address => ({ address })));
   ipc.listen();
 
   // ensure window always resolves

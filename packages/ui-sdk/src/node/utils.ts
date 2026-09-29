@@ -7,6 +7,7 @@ import * as types from '../types.js';
 import { defineProtocol, RpcProtocol } from '@cmdless/rpc-sdk';
 import { startWebSocket, closeWebSocketServer, getWebSocketUrl } from '@cmdless/rpc-sdk/ws/node';
 import { startSocket, connectSocket } from '@cmdless/rpc-sdk/node';
+import type { McpHandle } from './app.js';
 
 export function getEphemeralPrefix() {
   return '.cmdless.ui/';
@@ -140,15 +141,18 @@ export async function getMetaPackageVersion(specifier: string, meta: ImportMeta)
   return pkg.version as string;
 }
 
-export function findLocalBinPath(packageName: string, meta: ImportMeta): string | null {
-  const packagePath = findPackageJSON(packageName, meta.url);
-  if (!packagePath) return null;
-
+function resolveBinFromPackageJson(packagePath: string): string | null {
   const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
   const bin = typeof pkg.bin === 'string' ? pkg.bin : Object.values(pkg.bin ?? {})[0];
   if (typeof bin !== 'string') return null;
 
   return path.join(path.dirname(packagePath), bin);
+}
+
+export function findLocalBinPath(packageName: string, meta: ImportMeta): string | null {
+  const packagePath = findPackageJSON(packageName, meta.url);
+  if (!packagePath) return null;
+  return resolveBinFromPackageJson(packagePath);
 }
 
 export type PackageInstallParams = {
@@ -230,6 +234,44 @@ export async function runAsRuntime(meta: ImportMeta, args: string[] = [], cmdles
   }
   const version = await getMetaPackageVersion('@cmdless/ui-sdk', meta);
   return await runAsPackage({ specifier, version, cmdlessRoot }, args);
+}
+
+// resolves `packageName` the same way runAsRuntime does (locally first, then
+// ensurePackage's cache), then runs its `mcp` command. Unlike runAsRuntime,
+// there's no Electron involved here - just a plain node process - so the
+// child_process 'ipc' channel is safe to use to get its address back,
+// unlike the 'ipc' + Electron combination that causes app.whenReady() hangs
+// elsewhere in this codebase (see BinChannel's own comment).
+export async function runAsMcp(meta: ImportMeta, packageName: string, version?: string, cmdlessRoot?: string): Promise<McpHandle> {
+  const localBinPath = findLocalBinPath(packageName, meta);
+
+  const { binPath, env } = localBinPath
+    ? { binPath: localBinPath, env: execPackageEnv(cmdlessRoot) }
+    : await (async () => {
+      const { prefix, cmdlessRoot: root } = await ensurePackage({ specifier: packageName, version, cmdlessRoot });
+      const resolved = resolveBinFromPackageJson(path.join(prefix, 'node_modules', packageName, 'package.json'));
+      if (!resolved) throw new Error(`package ${packageName} has no "bin" entry`);
+      return { binPath: resolved, env: execPackageEnv(root) };
+    })();
+
+  const child = spawn(process.execPath, [binPath, 'mcp'], { env, stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+
+  const address = await new Promise<string>((resolve, reject) => {
+    child.once('message', (message: unknown) => {
+      const address = (message as { address?: string } | null)?.address;
+      if (address) resolve(address);
+      else reject(new Error(`${packageName}'s mcp command reported an invalid message`));
+    });
+    child.once('error', reject);
+    child.once('exit', code => reject(new Error(`${packageName}'s mcp command exited before reporting an address (code ${code})`)));
+  });
+
+  const dispose = () => new Promise<void>(resolve => {
+    child.once('exit', () => resolve());
+    child.kill();
+  });
+
+  return { address, dispose };
 }
 
 type CmdlessUIDispatcher = (parameters: types.Params, cmdlessRoot?: string) => Promise<string>;

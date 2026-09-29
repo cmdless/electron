@@ -38,7 +38,13 @@
   },
   "dependencies": {
     "@cmdless/rpc-sdk": "*",
-    "vscode-jsonrpc": "9.0.2"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "commander": "15.0.0",
+    "vscode-jsonrpc": "9.0.2",
+    "ws": "8.21.3",
+    "zod": "4.6.5"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/ws": "8.5.13"
+  }
 }
