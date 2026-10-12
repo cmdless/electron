@@ -22,6 +22,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.5.1",
+    "@cmdless/rpc-sdk": "*",
     "@cmdless/ui-sdk": "*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

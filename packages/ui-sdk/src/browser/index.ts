@@ -9,6 +9,16 @@ import type { Cmdless } from '../index.js';
 
 export type { Cmdless };
 
+// kept inline (rather than a separate env.d.ts) so it's guaranteed to ship
+// with dist/browser/index.d.ts - a standalone ambient .d.ts isn't pulled
+// into a consumer's compilation just by their importing this module, since
+// tsc doesn't emit/copy a source file that's already a .d.ts on its own.
+declare global {
+  interface Window {
+    cmdless: Cmdless;
+  }
+}
+
 // --- createClient: a facade over an app's MCP server, from the renderer.
 // Mirrors App<T>.tools' shape (same input/output per tool), but each call
 // lazily connects over MCP the first time any tool is actually invoked,

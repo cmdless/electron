@@ -12,6 +12,9 @@
     "type": "git",
     "url": "git+https://github.com/cmdless/electron.git"
   },
+  "bin": {
+    "ui-sdk": "./dist/node/bin.js"
+  },
   "exports": {
     "./node": {
       "types": "./dist/node/index.d.ts",

@@ -32,25 +32,54 @@ const preloadPath = path.join(__dirname, '../preload/index.mjs');
 // in-process (that lives in the app's own bin process, the one that invoked
 // createShowCommand), so there's no "self" shortcut here: every request,
 // including one from an app asking for its own tools, resolves the same
-// way. Cached per package so repeat requests (multiple windows/renderers,
-// or the same one reconnecting) reuse one subprocess instead of spawning a
-// fresh one each time.
-const mcpHandles = new Map<string, Promise<McpHandle>>();
+// way.
+//
+// Scoped per window tree, not global: a request walks up from the
+// requesting window through its ancestors (Electron's own --parent chain,
+// already wired through createWindow) looking for an existing instance for
+// that package; if none exists anywhere up the chain, the requesting
+// window opens one itself and owns it. Sibling windows under the same
+// parent therefore share one instance by default (the parent is a common
+// ancestor both find), but two unrelated top-level windows never do - and
+// closing the window that owns an instance disposes it instead of letting
+// it outlive its owner.
+const mcpHandlesByWindow = new Map<number, Map<string, Promise<McpHandle>>>();
 
-function getMcpAddress(packageName: string, version?: string): Promise<string> {
-  const key = `${packageName}@${version ?? ''}`;
-  let handle = mcpHandles.get(key);
-  if (!handle) {
-    handle = runAsMcp(import.meta, packageName, version);
-    handle.catch(() => mcpHandles.delete(key)); // don't cache a failed attempt
-    mcpHandles.set(key, handle);
+function findMcpHandle(win: BrowserWindow, key: string): Promise<McpHandle> | undefined {
+  for (let current: BrowserWindow | null = win; current; current = current.getParentWindow()) {
+    const handle = mcpHandlesByWindow.get(current.id)?.get(key);
+    if (handle) return handle;
   }
+  return undefined;
+}
+
+function getMcpAddress(win: BrowserWindow, packageName: string, version?: string): Promise<string> {
+  const key = `${packageName}@${version ?? ''}`;
+  const existing = findMcpHandle(win, key);
+  if (existing) return existing.then(({ address }) => address);
+
+  const handle = runAsMcp(import.meta, packageName, version);
+  let owned = mcpHandlesByWindow.get(win.id);
+  if (!owned) mcpHandlesByWindow.set(win.id, owned = new Map());
+  owned.set(key, handle);
+  handle.catch(() => owned.delete(key)); // don't cache a failed attempt
+
   return handle.then(({ address }) => address);
 }
 
-app.on('before-quit', () => {
-  for (const handle of mcpHandles.values())
+function disposeWindowMcpHandles(windowId: number) {
+  const owned = mcpHandlesByWindow.get(windowId);
+  if (!owned) return;
+  mcpHandlesByWindow.delete(windowId);
+  for (const handle of owned.values())
     handle.then(({ dispose }) => dispose()).catch(() => { });
+}
+
+// a safety net, not the primary cleanup path - every owner's handles are
+// already disposed when its own window closes (see createWindow).
+app.on('before-quit', () => {
+  for (const windowId of [...mcpHandlesByWindow.keys()])
+    disposeWindowMcpHandles(windowId);
 });
 
 async function createWindow(parameters: types.ShowParams, finish = resolve, parent?: BrowserWindow) {
@@ -91,11 +120,11 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
   ipc.onRequest.ui(parameters => ui.run(parameters));
   ipc.onRequest.connectionInfo(() => ({ address, windowId: win.id }));
   ipc.onRequest.mcpAddress(({ packageName, version }) =>
-    getMcpAddress(packageName, version).then(address => ({ address })));
+    getMcpAddress(win, packageName, version).then(address => ({ address })));
   ipc.listen();
 
   // ensure window always resolves
-  win.on('closed', () => finish(null));
+  win.on('closed', () => { finish(null); disposeWindowMcpHandles(win.id); });
   win.on('ready-to-show', () => win.show());
 
   win.webContents.setWindowOpenHandler((details) => {

@@ -236,23 +236,42 @@ export async function runAsRuntime(meta: ImportMeta, args: string[] = [], cmdles
   return await runAsPackage({ specifier, version, cmdlessRoot }, args);
 }
 
-// resolves `packageName` the same way runAsRuntime does (locally first, then
-// ensurePackage's cache), then runs its `mcp` command. Unlike runAsRuntime,
-// there's no Electron involved here - just a plain node process - so the
-// child_process 'ipc' channel is safe to use to get its address back,
-// unlike the 'ipc' + Electron combination that causes app.whenReady() hangs
-// elsewhere in this codebase (see BinChannel's own comment).
-export async function runAsMcp(meta: ImportMeta, packageName: string, version?: string, cmdlessRoot?: string): Promise<McpHandle> {
+// resolves `packageName` the same way runAsRuntime does: locally first (via
+// findLocalBinPath), falling back to ensurePackage's cache.
+async function resolvePackageBin(meta: ImportMeta, packageName: string, version?: string, cmdlessRoot?: string) {
   const localBinPath = findLocalBinPath(packageName, meta);
+  if (localBinPath) return { binPath: localBinPath, env: execPackageEnv(cmdlessRoot) };
 
-  const { binPath, env } = localBinPath
-    ? { binPath: localBinPath, env: execPackageEnv(cmdlessRoot) }
-    : await (async () => {
-      const { prefix, cmdlessRoot: root } = await ensurePackage({ specifier: packageName, version, cmdlessRoot });
-      const resolved = resolveBinFromPackageJson(path.join(prefix, 'node_modules', packageName, 'package.json'));
-      if (!resolved) throw new Error(`package ${packageName} has no "bin" entry`);
-      return { binPath: resolved, env: execPackageEnv(root) };
-    })();
+  const { prefix, cmdlessRoot: root } = await ensurePackage({ specifier: packageName, version, cmdlessRoot });
+  const resolved = resolveBinFromPackageJson(path.join(prefix, 'node_modules', packageName, 'package.json'));
+  if (!resolved) throw new Error(`package ${packageName} has no "bin" entry`);
+  return { binPath: resolved, env: execPackageEnv(root) };
+}
+
+export type SpawnAsPackageOptions = {
+  version?: string;
+  cmdlessRoot?: string;
+};
+
+// resolves packageName via resolvePackageBin, then spawns its bin directly
+// with piped stdio, for a long-running process you need to stream to/from
+// (e.g. an ACP agent's JSON-RPC-over-stdio) - unlike spawnPackage (stdio
+// inherited from this process, e.g. Electron) or runPackage/runAsPackage
+// (blocking, captures output only once the process exits).
+export async function spawnAsPackage(meta: ImportMeta, packageName: string, args: string[] = [], options: SpawnAsPackageOptions = {}) {
+  const { binPath, env } = await resolvePackageBin(meta, packageName, options.version, options.cmdlessRoot);
+  const child = spawn(process.execPath, [binPath, ...args], { env, stdio: ['pipe', 'pipe', 'inherit'] });
+  forwardSignals(child);
+  return child;
+}
+
+// runs its `mcp` command. Unlike runAsRuntime, there's no Electron involved
+// here - just a plain node process - so the child_process 'ipc' channel is
+// safe to use to get its address back, unlike the 'ipc' + Electron
+// combination that causes app.whenReady() hangs elsewhere in this codebase
+// (see BinChannel's own comment).
+export async function runAsMcp(meta: ImportMeta, packageName: string, version?: string, cmdlessRoot?: string): Promise<McpHandle> {
+  const { binPath, env } = await resolvePackageBin(meta, packageName, version, cmdlessRoot);
 
   const child = spawn(process.execPath, [binPath, 'mcp'], { env, stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
 
@@ -355,10 +374,16 @@ export function createShowCommand<In = void, Out = string, P extends RpcProtocol
     // a dev server (e.g. a vite plugin) can publish its own URL under
     // CmdlessEnv.url - when present, it always wins over whatever params()
     // returned, so individual show commands never have to check for it.
+    // params()'s own source may carry a hash route (e.g. for a single-page
+    // renderer with multiple top-level views) - that's preserved onto the
+    // dev URL too, so routing works the same whether it's the built file or
+    // the dev server.
     const url = acquireCmdlessUrl();
     if (url) {
+      const hashIndex = parameters.source.indexOf('#');
+      const hash = hashIndex >= 0 ? parameters.source.slice(hashIndex) : '';
       parameters.type = 'url';
-      parameters.source = url;
+      parameters.source = url + hash;
     }
 
     const server = transport ? await startWebSocket<P>(transport(input, parameters)) : undefined;

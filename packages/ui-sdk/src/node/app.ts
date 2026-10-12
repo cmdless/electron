@@ -144,12 +144,14 @@ function unwrap(schema: unknown): unknown {
 
 function isFlaggable(schema: unknown): boolean {
   const s = unwrap(schema);
-  return s instanceof z.ZodString || s instanceof z.ZodNumber || s instanceof z.ZodBoolean || s instanceof z.ZodEnum;
+  return s instanceof z.ZodString || s instanceof z.ZodNumber || s instanceof z.ZodBoolean || s instanceof z.ZodEnum
+    || s instanceof z.ZodObject || s instanceof z.ZodRecord;
 }
 
 function coerceFlag(schema: unknown, raw: string | boolean): unknown {
   const s = unwrap(schema);
   if (s instanceof z.ZodNumber) return Number(raw);
+  if (s instanceof z.ZodObject || s instanceof z.ZodRecord) return JSON.parse(raw as string);
   return raw;
 }
 

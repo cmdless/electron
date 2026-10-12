@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CmdlessUI, getPackageName } from './utils.js';
+import { CmdlessUI, CmdlessEnv, createShowCommand, getPackageName } from './utils.js';
+import type * as types from '../types.js';
 
 test('getPackageName splits a scoped specifier with a version', () => {
   assert.deepEqual(getPackageName('@cmdless/ui-runtime@0.0.3'), {
@@ -53,4 +54,51 @@ test('CmdlessUI.toArgs builds message-box argv', () => {
     message: 'are you sure?',
   });
   assert.deepEqual(args, ['message-box', 'warning', 'are you sure?']);
+});
+
+test('createShowCommand: a dev CMDLESS_URL override preserves the original source\'s hash route', async () => {
+  let seen: types.ShowParams | undefined;
+  const dispatcher = async (parameters: types.Params) => {
+    seen = parameters as types.ShowParams;
+    return 'ok';
+  };
+
+  const show = createShowCommand({
+    params: () => ({ type: 'file', source: '/dist/index.html#/pick-agent' }),
+    dispatcher,
+  });
+
+  const originalUrl = CmdlessEnv.url;
+  CmdlessEnv.url = 'http://localhost:5173/';
+  try {
+    await show();
+  } finally {
+    CmdlessEnv.url = originalUrl;
+  }
+
+  assert.equal(seen?.type, 'url');
+  assert.equal(seen?.source, 'http://localhost:5173/#/pick-agent');
+});
+
+test('createShowCommand: a dev CMDLESS_URL override with no hash in the original source is used as-is', async () => {
+  let seen: types.ShowParams | undefined;
+  const dispatcher = async (parameters: types.Params) => {
+    seen = parameters as types.ShowParams;
+    return 'ok';
+  };
+
+  const show = createShowCommand({
+    params: () => ({ type: 'file', source: '/dist/index.html' }),
+    dispatcher,
+  });
+
+  const originalUrl = CmdlessEnv.url;
+  CmdlessEnv.url = 'http://localhost:5173/';
+  try {
+    await show();
+  } finally {
+    CmdlessEnv.url = originalUrl;
+  }
+
+  assert.equal(seen?.source, 'http://localhost:5173/');
 });

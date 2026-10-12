@@ -13,7 +13,9 @@ Both accept `--app <name>` to group windows/dialogs under one Electron app ident
 
 ## MCP mediation
 
-A hosted window's renderer can ask main for any package's MCP server address (`cmdlessIPC`'s `mcpAddress` request, from a `createClient` facade in [`@cmdless/ui-sdk/browser`](../../packages/ui-sdk)) — main resolves and spawns it via `runAsMcp`, caching the result per package so repeat requests reuse the same subprocess. This app never runs any package's own `createApp` in-process (that lives in the package's own bin process, the one that invoked `createShowCommand`), so every request, including a package asking for its own tools, resolves the same way.
+A hosted window's renderer can ask main for any package's MCP server address (`cmdlessIPC`'s `mcpAddress` request, from a `createClient` facade in [`@cmdless/ui-sdk/browser`](../../packages/ui-sdk)) — main resolves and spawns it via `runAsMcp`. This app never runs any package's own `createApp` in-process (that lives in the package's own bin process, the one that invoked `createShowCommand`), so every request, including a package asking for its own tools, resolves the same way.
+
+Instances are cached per window tree, not globally: a request walks up from the requesting window through its ancestors (Electron's own `--parent` chain) looking for an existing instance of that package; if none exists anywhere up the chain, the requesting window opens one itself and owns it. Sibling windows sharing a parent therefore reuse one instance by default, but two unrelated top-level windows never do - and closing the window that owns an instance disposes it immediately, rather than it lingering until the whole app quits.
 
 ## How it resolves
 

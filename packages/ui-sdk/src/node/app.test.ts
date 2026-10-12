@@ -101,6 +101,28 @@ test('cli: flags override matching fields from the JSON positional', async () =>
   assert.deepEqual(JSON.parse(output), { pid: 105 });
 });
 
+test('cli: an object/record field can be set as a flag, parsed as JSON', async () => {
+  const spec = defineApp(({ tool, z }) => ({
+    name: 'test-app',
+    tools: {
+      configure: tool('configure', 'Apply config', {
+        input: z.object({ config: z.record(z.string(), z.string()).optional() }),
+        output: z.object({ config: z.record(z.string(), z.string()).optional() }),
+      }),
+    },
+  }));
+
+  const app = createApp({
+    spec,
+    setup: () => ({
+      configure: async ({ config }) => ({ config }),
+    }),
+  })();
+
+  const output = await runCapturingStdout(app, ['tool', 'configure', '--config', '{"reasoning":"high"}']);
+  assert.deepEqual(JSON.parse(output), { config: { reasoning: 'high' } });
+});
+
 test('cli: startup runs on no subcommand and receives the app itself', async () => {
   const spec = defineApp(({ tool, z }) => ({
     name: 'test-app',
