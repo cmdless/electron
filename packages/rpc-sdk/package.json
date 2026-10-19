@@ -45,6 +45,7 @@
     "test": "node ../../scripts/run-tests.mjs"
   },
   "dependencies": {
+    "fast-json-patch": "3.1.1",
     "vscode-jsonrpc": "9.0.2",
     "vscode-ws-jsonrpc": "3.5.0",
     "ws": "8.21.3"

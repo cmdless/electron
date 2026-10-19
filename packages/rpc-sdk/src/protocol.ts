@@ -1,6 +1,8 @@
 import type { MessageConnection, Disposable } from "vscode-jsonrpc";
 import { NotificationType, RequestType } from "vscode-jsonrpc";
 import { MaybePromise } from "./shared.js";
+import { createStore } from "./state.js";
+import type { RpcStore } from "./state.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Any = any;
@@ -11,6 +13,12 @@ export type RpcNotification<P> = { type: NotificationType<P>; };
 export type RequestParams<T> = T extends RpcRequest<infer P, Any> ? P : never;
 export type RequestResult<T> = T extends RpcRequest<Any, infer R> ? R : never;
 export type NotificationParams<T> = T extends RpcNotification<infer P> ? P : never;
+
+// a state channel: a named piece of server-owned state clients can subscribe
+// to. `_state` only carries the type, like RequestType does for its params.
+export type RpcState<S> = { name: string; _state?: S; };
+export type RpcStates = Record<string, RpcState<Any>>;
+export type StateValues<C extends RpcStates> = { [K in keyof C]: C[K] extends RpcState<infer S> ? S : never };
 
 export type RpcRequests = Record<string, RpcRequest<Any, Any>>;
 export type RpcNotifications = Record<string, RpcNotification<Any>>;
@@ -115,21 +123,110 @@ function peer<Channel extends RpcChannel>(
   } as RpcPeer<Channel>;
 }
 
-export type RpcProtocol<Client extends RpcChannel = RpcChannel, Server extends RpcChannel = RpcChannel> = {
+type HasState<S> = keyof S extends never ? false : true;
+
+// the store a server is given: required when the protocol declares state
+// channels, absent when it doesn't
+export type ServerStore<S extends Record<string, unknown>> =
+  HasState<S> extends true ? RpcStore<S> : undefined;
+
+// what a server peer can do with the shared store. It's the same store for
+// every connection, so set and update change state for all of them.
+export type ServerState<S extends Record<string, unknown>> =
+  HasState<S> extends true
+  ? Pick<RpcStore<S>, 'set' | 'update'> & { readonly current: Readonly<S> }
+  : {};
+
+export type RpcClient<Channel extends RpcChannel = RpcChannel> = RpcPeer<Channel>;
+export type RpcServer<Channel extends RpcChannel = RpcChannel, S extends Record<string, unknown> = {}> =
+  RpcPeer<Channel> & { state: ServerState<S> };
+
+function createRpcClient<Channel extends RpcChannel>(channel: Channel, connection: MessageConnection): RpcClient<Channel> {
+  return peer(channel, connection);
+}
+
+function createRpcServer<Channel extends RpcChannel, S extends Record<string, unknown>>(
+  channel: Channel,
+  connection: MessageConnection,
+  store: ServerStore<S>,
+): RpcServer<Channel, S> {
+  const state = store
+    ? { get current() { return store.state; }, set: store.set, update: store.update }
+    : {};
+  return { ...peer(channel, connection), state: state as ServerState<S> };
+}
+
+// createServer's store argument: required when the protocol declares state
+// channels, not taken when it doesn't
+export type ServerStoreArgs<S extends Record<string, unknown>> =
+  HasState<S> extends true ? [store: RpcStore<S>] : [];
+
+// a running server: one store, and what each new connection is handed to
+export type RpcHost<Channel extends RpcChannel, S extends Record<string, unknown>> = {
+  store: ServerStore<S>;
+  accept: (connection: MessageConnection) => RpcServer<Channel, S>;
+};
+
+// everything about a server that's the same for every connection: the
+// handlers each one gets, and - when the protocol declares state channels -
+// where their state starts
+export type HostDefinition<Channel extends RpcChannel, S extends Record<string, unknown>> = {
+  configure?: (server: RpcServer<Channel, S>, store: ServerStore<S>) => void;
+} & (HasState<S> extends true ? { state: () => MaybePromise<S> } : { state?: undefined });
+
+export type RpcProtocol<
+  Client extends RpcChannel = RpcChannel,
+  Server extends RpcChannel = RpcChannel,
+  States extends RpcStates = {},
+> = {
   client: Client;
   server: Server;
-  createClient: (connection: MessageConnection) => RpcPeer<Client>;
-  createServer: (connection: MessageConnection) => RpcPeer<Server>;
+  state: States;
+  createClient: (connection: MessageConnection) => RpcClient<Client>;
+  // one store per server, shared by every connection to it
+  createStore: (init: () => MaybePromise<StateValues<States>>) => Promise<RpcStore<StateValues<States>>>;
+
+  // these two are methods, not function properties, so a specific protocol
+  // still fits where the generic RpcProtocol is asked for (method
+  // parameters are checked bivariantly, and these take state-typed args)
+
+  // one unconfigured server peer - what a host's accept is built on, and
+  // what a test reaches for directly
+  createServer(connection: MessageConnection, ...store: ServerStoreArgs<StateValues<States>>): RpcServer<Server, StateValues<States>>;
+  // defines a server once; each call of what it returns starts one - the
+  // store, and an accept that turns each connection into a configured peer,
+  // ready to listen
+  defineHost(definition: HostDefinition<Server, StateValues<States>>): () => Promise<RpcHost<Server, StateValues<States>>>;
 };
-function protocol<Client extends RpcChannel, Server extends RpcChannel>(
+function protocol<Client extends RpcChannel, Server extends RpcChannel, States extends RpcStates>(
   client: Client,
   server: Server,
-): RpcProtocol<Client, Server> {
+  state: States,
+): RpcProtocol<Client, Server, States> {
+  type S = StateValues<States>;
+
+  function createServer(connection: MessageConnection, ...[store]: ServerStoreArgs<S>) {
+    return createRpcServer<Server, S>(server, connection, store as ServerStore<S>);
+  }
+
   return {
     client,
     server,
-    createClient(connection) { return peer(client, connection); },
-    createServer(connection) { return peer(server, connection); },
+    state,
+    createClient(connection) { return createRpcClient(client, connection); },
+    createStore(init) { return createStore(state, init); },
+    createServer,
+    defineHost({ configure, state: init }) {
+      return async () => {
+        const store = (init ? await createStore(state, init) : undefined) as ServerStore<S>;
+        const accept = (connection: MessageConnection) => {
+          const rpc = createServer(connection, ...([store] as ServerStoreArgs<S>));
+          configure?.(rpc, store);
+          return rpc;
+        };
+        return { store, accept };
+      };
+    },
   };
 }
 
@@ -156,11 +253,17 @@ function notification<P>(method: string): RpcNotification<P> {
   return { type: new NotificationType<P>(method) };
 }
 
+function state<S>(name: string): RpcState<S> {
+  return { name };
+}
+
 export type RpcProtocolSpec = Partial<{
   clientToServer: RpcSide;
   serverToClient: RpcSide;
   eitherToEither: RpcSide;
+  state: RpcStates;
 }>;
+export type StatesOf<P> = P extends { state: infer C extends RpcStates } ? C : {};
 export type EmptySide = RpcSide<RpcRequests, RpcNotifications>;
 export type SideOf<P, K extends keyof RpcProtocolSpec> = K extends keyof P ? P[K] extends RpcSide ? P[K] : EmptySide : EmptySide;
 export type Protocol<P extends RpcProtocolSpec> =
@@ -172,21 +275,23 @@ export type Protocol<P extends RpcProtocolSpec> =
     RpcChannel<
       MergeSides<SideOf<P, 'serverToClient'>, SideOf<P, 'eitherToEither'>>,
       MergeSides<SideOf<P, 'clientToServer'>, SideOf<P, 'eitherToEither'>>
-    >
+    >,
+    StatesOf<P>
   >;
 
 export type ProtocolFactory<P extends RpcProtocolSpec> = (parameters: {
   side: typeof side;
   request: typeof request;
   notification: typeof notification;
+  state: typeof state;
 }) => P;
 
 export function defineProtocol<const P extends RpcProtocolSpec>(factory: ProtocolFactory<P>): Protocol<P> {
-  const spec = factory({ side, request, notification });
+  const spec = factory({ side, request, notification, state });
   const clientToServer = getSide(spec, 'clientToServer');
   const serverToClient = getSide(spec, 'serverToClient');
   const eitherToEither = getSide(spec, 'eitherToEither');
   const client = channel(mergeSides(clientToServer, eitherToEither), mergeSides(serverToClient, eitherToEither));
   const server = channel(mergeSides(serverToClient, eitherToEither), mergeSides(clientToServer, eitherToEither));
-  return protocol(client, server);
+  return protocol(client, server, (spec.state ?? {}) as StatesOf<P>);
 }

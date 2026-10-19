@@ -4,7 +4,9 @@ import { findPackageJSON } from "node:module";
 import { execFileSync, spawn } from 'node:child_process';
 import type { SpawnOptions } from 'node:child_process';
 import * as types from '../types.js';
-import { defineProtocol, RpcProtocol } from '@cmdless/rpc-sdk';
+import { defineProtocol } from '@cmdless/rpc-sdk';
+import type { MaybePromise, TransportParameters } from '@cmdless/rpc-sdk';
+import type { ServerOptions } from 'ws';
 import { startWebSocket, closeWebSocketServer, getWebSocketUrl } from '@cmdless/rpc-sdk/ws/node';
 import { startSocket, connectSocket } from '@cmdless/rpc-sdk/node';
 import { getCmdlessRoot, getTmpSocketPath, setCmdlessRoot } from '@cmdless/core/node';
@@ -42,11 +44,10 @@ const binProtocol = defineProtocol(({ side, notification }) => ({
 export class BinChannel {
   static async start(onMessage: (message: BinMessage) => void) {
     const socketPath = getTmpSocketPath(crypto.randomUUID());
-    const server = await startSocket({
-      protocol: binProtocol,
-      options: { path: socketPath },
+    const { accept } = await binProtocol.defineHost({
       configure: peer => peer.onNotification.message(onMessage),
-    });
+    })();
+    const server = await startSocket({ accept, options: { path: socketPath } });
 
     return {
       env: { ...process.env, [BIN_SOCKET_KEY]: socketPath },
@@ -398,12 +399,12 @@ export class CmdlessUI {
   }
 }
 
-export function createShowCommand<In = void, Out = string, P extends RpcProtocol = RpcProtocol>(config: {
+export function createShowCommand<In = void, Out = string>(config: {
   params: (input: In) => Omit<types.ShowParams, 'kind' | 'address' | 'parent'>;
   result?: (input: In, stdout: string) => Out;
   dispatcher?: CmdlessUIDispatcher;
   cmdlessRoot?: string;
-  transport?: (input: In, parameters: types.ShowParams) => Parameters<typeof startWebSocket<P>>[0];
+  transport?: (input: In, parameters: types.ShowParams) => MaybePromise<TransportParameters<ServerOptions>>;
 }) {
   return async (input: In, parent?: number): Promise<Out> => {
     const {
@@ -435,7 +436,7 @@ export function createShowCommand<In = void, Out = string, P extends RpcProtocol
       parameters.source = url + hash;
     }
 
-    const server = transport ? await startWebSocket<P>(transport(input, parameters)) : undefined;
+    const server = transport ? await startWebSocket(await transport(input, parameters)) : undefined;
     try {
       if (server) {
         const address = getWebSocketUrl(server);

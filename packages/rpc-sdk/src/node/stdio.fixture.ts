@@ -7,9 +7,10 @@ const protocol = defineProtocol(({ side, request }) => ({
   }),
 }));
 
-await startStdio({
-  protocol,
+const { accept } = await protocol.defineHost({
   configure: peer => {
     peer.onRequest.ping(({ text }) => ({ text: text.toUpperCase() }));
   },
-});
+})();
+
+await startStdio({ accept });

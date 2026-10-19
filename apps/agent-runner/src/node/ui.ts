@@ -39,13 +39,14 @@ export function createPicker<Out>(route: string) {
 export function createInputPicker<In, Out>(route: string) {
   const protocol = defineGetProtocol<In>();
 
-  return createShowCommand<In, Out, typeof protocol>({
+  return createShowCommand<In, Out>({
     params: () => ({ type: 'file', source: pickerSource(route) }),
-    transport: input => ({
-      protocol,
-      configure: peer => peer.onRequest.get(() => input),
-      options: { port: 0, host: '127.0.0.1' },
-    }),
+    transport: async input => {
+      const { accept } = await protocol.defineHost({
+        configure: peer => peer.onRequest.get(() => input),
+      })();
+      return { accept, options: { port: 0, host: '127.0.0.1' } };
+    },
     result: (_, stdout) => JSON.parse(stdout),
   });
 }

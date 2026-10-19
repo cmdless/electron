@@ -1,6 +1,5 @@
 import 'vscode-jsonrpc/node'; // installs the Node runtime abstraction layer WebSocketMessageReader/Writer need
 import { WebSocketServer, type ServerOptions } from 'ws';
-import type { RpcProtocol } from '../../protocol.js';
 import type { TransportParameters } from '../../shared.js';
 import { createWebSocket } from '../connections.js';
 
@@ -29,18 +28,12 @@ export function waitForWebSocketListening(server: WebSocketServer): Promise<WebS
   });
 }
 
-export async function startWebSocket<P extends RpcProtocol>(
-  parameters: TransportParameters<P, ServerOptions>,
+export async function startWebSocket(
+  parameters: TransportParameters<ServerOptions>,
 ): Promise<WebSocketServer> {
-  const { protocol, configure, options } = parameters;
+  const { accept, options } = parameters;
   const server = new WebSocketServer(options);
-
-  server.on('connection', socket => {
-    const connection = createWebSocket(socket);
-    const peer = protocol.createServer(connection);
-    configure?.(peer);
-    peer.listen();
-  });
+  server.on('connection', socket => accept(createWebSocket(socket)).listen());
 
   return waitForWebSocketListening(server);
 }

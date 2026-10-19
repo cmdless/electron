@@ -91,9 +91,9 @@ Types flow end to end: the `params`/`result` types for `ping` above come straigh
   - `createSocket(socket)` — a `net.Socket`, via `SocketMessageReader`/`SocketMessageWriter`, which dispose of the connection correctly (closing the socket) unlike the generic stream writer.
   - `createIPC(target)` — a `ChildProcess` or `NodeJS.Process`, via `IPCMessageReader`/`IPCMessageWriter`, built on `process.send()`/`'message'` events (e.g. the channel between a Node parent and a `child_process.spawn(..., { stdio: [..., 'ipc'] })` child).
   - `createPort(port)` — a `MessagePort` or `Worker` from `node:worker_threads`, via `PortMessageReader`/`PortMessageWriter`.
-  - `startStdio({ protocol, configure? })` — `createStdio()` is the *server* side of a stdio transport (a spawned process's own stdin/stdout, same convention as LSP-over-stdio); this creates the server peer, runs `configure`, and calls `.listen()` for you. Unlike `startWebSocket`, this returns the **peer itself**, not a separate handle — stdio only ever has exactly one peer for its whole lifetime, there's no accept phase to hand back a handle for.
+  - `startStdio({ accept })` — `createStdio()` is the *server* side of a stdio transport (a spawned process's own stdin/stdout, same convention as LSP-over-stdio); this hands the connection to `accept` (usually a host's, from `protocol.defineHost`) and calls `.listen()` on the peer it returns. Unlike `startWebSocket`, this returns the **peer itself**, not a separate handle — stdio only ever has exactly one peer for its whole lifetime, there's no accept phase to hand back a handle for.
   - `connectStdio(protocol, { command, args? })` — the client side: spawns `command`, wraps its stdout/stdin from the outside, and returns a ready **client peer** (call `.listen()` yourself when ready, same as `connectWebSocket` — no `configure` needed since you already have the peer to register handlers on directly). Disposing the returned peer's connection also kills the spawned process. Deliberately doesn't expose the full `SpawnOptions` surface — some of those need to stay fixed (e.g. `stdio: ['pipe', 'pipe', 'inherit']`) for the wiring to work at all.
-  - `startSocket({ protocol, configure?, options? })` — a plain `net.Server`: creates it, calls `.listen(options)` (`options` are `net.ListenOptions`, e.g. `{ port: 9000 }`), and for every accepted `net.Socket` wraps it via `createSocket`, creates a server peer, runs `configure`, and calls `.listen()` for you — same shape as `startWebSocket`, returning the server handle since many peers can connect over its lifetime.
+  - `startSocket({ accept, options? })` — a plain `net.Server`: creates it, calls `.listen(options)` (`options` are `net.ListenOptions`, e.g. `{ port: 9000 }`), and for every accepted `net.Socket` wraps it via `createSocket`, hands it to `accept`, and calls `.listen()` on the peer it returns — same shape as `startWebSocket`, returning the server handle since many peers can connect over its lifetime.
   - `connectSocket(protocol, options)` — the client side: `net.createConnection(options)` (`options` are `net.NetConnectOpts`, e.g. `{ port: 9000, host: 'localhost' }` or `{ path: '/tmp/my.sock' }`), waits for `'connect'`, and returns a ready **client peer** (same "you call `.listen()`" convention as `connectStdio`/`connectWebSocket`).
 
   ```ts
@@ -103,10 +103,10 @@ Types flow end to end: the `params`/`result` types for `ping` above come straigh
   const connection = createStdio(); // process.stdin / process.stdout, wrapped directly
 
   // or, as the server side of a protocol:
-  const server = await startStdio({
-    protocol: myProtocol,
+  const { accept } = await myProtocol.defineHost({
     configure(peer) { peer.onRequest.ping(async () => ({ ok: true })); },
-  });
+  })();
+  const server = await startStdio({ accept });
 
   // and from whoever spawns that process:
   const client = connectStdio(myProtocol, { command: 'my-server', args: ['--flag'] });
@@ -131,23 +131,22 @@ Types flow end to end: the `params`/`result` types for `ping` above come straigh
 
 - **`@cmdless/rpc-sdk/ws/node`** — the server-listening side, built on the `ws` package. Node-only (unlike `@cmdless/rpc-sdk/ws`, which is safe from a browser too) — this is the one place that actually needs `ws` at runtime, not just its types.
 
-  - `startWebSocket({ protocol, configure?, options? })` — starts a `ws` `WebSocketServer` (`options` are `ws`'s own `ServerOptions`, e.g. `{ port: 8080 }`), resolving once it's actually listening (see `waitForListening` below), and for every accepted connection: wraps it via `createWebSocket` from `@cmdless/rpc-sdk/ws`, creates a server peer with `protocol.createServer(connection)`, calls your `configure(peer)` hook to register `onRequest`/`onNotification` handlers, then calls `peer.listen()` for you.
+  - `startWebSocket({ accept, options? })` — starts a `ws` `WebSocketServer` (`options` are `ws`'s own `ServerOptions`, e.g. `{ port: 8080 }`), resolving once it's actually listening (see `waitForListening` below), and for every accepted connection: wraps it via `createWebSocket` from `@cmdless/rpc-sdk/ws`, hands it to `accept` (which returns a configured server peer), then calls `peer.listen()` for you.
   - `waitForListening(server)` — resolves once the server is actually ready to accept connections, reading `server.options` to pick the right signal: immediately for `noServer: true` (nothing to bind), immediately if an externally-provided `server` is already listening, otherwise waiting for that external server's (or `ws`'s own) `'listening'` event — rejecting on `'error'` in the waiting case.
 
   ```ts
   import { startWebSocket } from '@cmdless/rpc-sdk/ws/node';
   import { myProtocol } from './protocol.js';
 
-  const server = await startWebSocket({
-    protocol: myProtocol,
-    options: { port: 8080 },
+  const { accept } = await myProtocol.defineHost({
     configure(peer) {
       peer.onRequest.ping(async () => ({ ok: true }));
     },
-  });
+  })();
+  const server = await startWebSocket({ accept, options: { port: 8080 } });
   ```
 
-  `TransportParameters<P, Options>` (the `{ protocol, configure, options }` shape) is exported from the package root, not this module — it's meant to be reused by future "start a transport server" helpers beyond just WebSocket.
+  `TransportParameters<Options>` (the `{ accept, options }` shape) is exported from the package root, not this module — it's meant to be reused by future "start a transport server" helpers beyond just WebSocket.
 
 ## Exports
 

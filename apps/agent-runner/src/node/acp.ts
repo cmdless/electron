@@ -158,27 +158,28 @@ export async function applySessionConfig(session: AcpSession, requested: AcpSess
 // closes, since the window's own resolve value has no reason to carry it.
 type ConversationInput = { session: AcpSession; initialPrompt: string; onUpdate: (update: acp.SessionUpdate) => void };
 
-export const showConversation = createShowCommand<ConversationInput, void, typeof conversationProtocol>({
+export const showConversation = createShowCommand<ConversationInput, void>({
   params: () => ({ type: 'file', source: pickerSource('/conversation') }),
-  transport: ({ session, initialPrompt, onUpdate }) => ({
-    protocol: conversationProtocol,
-    configure: peer => {
-      peer.onRequest.sendPrompt(({ text }) => { session.sendPrompt(text); });
-      // pumps session updates to the window for as long as it's open -
-      // once the window closes and the caller disposes the session,
-      // nextUpdate() rejects and this loop ends on its own.
-      (async () => {
-        session.sendPrompt(initialPrompt);
-        for (;;) {
-          const result = await session.nextUpdate();
-          if (result.kind === 'stop') { peer.notify.stop({ stopReason: result.stopReason }); continue; }
-          onUpdate(result.update);
-          peer.notify.update(result.notification);
-        }
-      })().catch(() => { });
-    },
-    options: { port: 0, host: '127.0.0.1' },
-  }),
+  transport: async ({ session, initialPrompt, onUpdate }) => {
+    const { accept } = await conversationProtocol.defineHost({
+      configure: peer => {
+        peer.onRequest.sendPrompt(({ text }) => { session.sendPrompt(text); });
+        // pumps session updates to the window for as long as it's open -
+        // once the window closes and the caller disposes the session,
+        // nextUpdate() rejects and this loop ends on its own.
+        (async () => {
+          session.sendPrompt(initialPrompt);
+          for (;;) {
+            const result = await session.nextUpdate();
+            if (result.kind === 'stop') { peer.notify.stop({ stopReason: result.stopReason }); continue; }
+            onUpdate(result.update);
+            peer.notify.update(result.notification);
+          }
+        })().catch(() => { });
+      },
+    })();
+    return { accept, options: { port: 0, host: '127.0.0.1' } };
+  },
 });
 
 // splits a run of updates into distinct agent messages - each contiguous

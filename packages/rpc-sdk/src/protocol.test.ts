@@ -2,6 +2,7 @@ import 'vscode-jsonrpc/node'; // installs the Node runtime abstraction layer the
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defineProtocol } from './protocol.js';
+import type { StateValues } from './protocol.js';
 import { createCallback } from './connections.js';
 import type { DataCallback } from './connections.js';
 
@@ -88,4 +89,117 @@ test('disposing a notification handler stops it from firing', async () => {
   await tick();
 
   assert.deepEqual(received, [1]);
+});
+
+test('state channels are declared beside the sides and keep their value types', () => {
+  type Agents = { entries: Record<string, { name: string }> };
+  const protocol = defineProtocol(({ side, request, state }) => ({
+    clientToServer: side({
+      requests: { addAgent: request<{ id: string }, void>('agents/add') },
+    }),
+    state: {
+      agents: state<Agents>('agents'),
+      count: state<number>('count'),
+    },
+  }));
+
+  assert.deepEqual(protocol.state, { agents: { name: 'agents' }, count: { name: 'count' } });
+
+  type Values = StateValues<typeof protocol.state>;
+  const values: Values = { agents: { entries: { a: { name: 'A' } } }, count: 1 };
+  // @ts-expect-error - count is a number
+  const wrong: Values = { agents: { entries: {} }, count: 'one' };
+  void values; void wrong;
+});
+
+test('a protocol without state channels has an empty state', () => {
+  const protocol = defineProtocol(({ side, request }) => ({
+    clientToServer: side({ requests: { ping: request('ping') } }),
+  }));
+  assert.deepEqual(protocol.state, {});
+  const empty: {} = protocol.state;
+  void empty;
+});
+
+test('defineHost configures every connection it accepts the same way', async () => {
+  const protocol = defineProtocol(({ side, request }) => ({
+    clientToServer: side({
+      requests: { ping: request<{ text: string }, string>('ping') },
+    }),
+  }));
+
+  let configured = 0;
+  const createPingHost = protocol.defineHost({
+    configure: (server, store) => {
+      configured++;
+      assert.equal(store, undefined);
+      server.onRequest.ping(({ text }) => `pong ${text}`);
+    },
+  });
+  const { store, accept } = await createPingHost();
+  assert.equal(store, undefined);
+
+  for (const text of ['a', 'b']) {
+    const { clientConn, serverConn } = createLoopbackPair();
+    const server = accept(serverConn);
+    const client = protocol.createClient(clientConn);
+    server.listen();
+    client.listen();
+    assert.equal(await client.request.ping({ text }), `pong ${text}`);
+    assert.deepEqual(server.state, {});
+  }
+
+  assert.equal(configured, 2);
+});
+
+test('defineHost creates a store from state and shares it with every connection', async () => {
+  const protocol = defineProtocol(({ side, request, state }) => ({
+    clientToServer: side({
+      requests: { increment: request<void, number>('increment') },
+    }),
+    state: { count: state<number>('count') },
+  }));
+
+  const createCounterHost = protocol.defineHost({
+    state: async () => ({ count: 0 }),
+    configure: (server, store) => {
+      server.onRequest.increment(() => {
+        store.update('count', count => count + 1);
+        return store.state.count;
+      });
+    },
+  });
+  const { store, accept } = await createCounterHost();
+
+  for (const expected of [1, 2]) {
+    const { clientConn, serverConn } = createLoopbackPair();
+    const server = accept(serverConn);
+    const client = protocol.createClient(clientConn);
+    server.listen();
+    client.listen();
+    assert.equal(await client.request.increment(), expected);
+  }
+  assert.equal(store.state.count, 2);
+
+  // each call of the factory is its own host, with its own store
+  const other = await createCounterHost();
+  assert.equal(other.store.state.count, 0);
+
+  // @ts-expect-error - a protocol with state channels needs its initial state
+  protocol.defineHost({});
+});
+
+test('createServer takes the store directly, for when there is no host', async () => {
+  const protocol = defineProtocol(({ state }) => ({
+    state: { count: state<number>('count') },
+  }));
+  const store = await protocol.createStore(() => ({ count: 0 }));
+  const { serverConn } = createLoopbackPair();
+
+  const server = protocol.createServer(serverConn, store);
+  server.state.set({ count: 3 });
+  assert.equal(store.state.count, 3);
+
+  // @ts-expect-error - a protocol with state channels needs a store
+  protocol.createServer(serverConn);
 });

@@ -14,14 +14,13 @@ test('startWebSocket/connectWebSocket round-trip over a real WebSocket', async (
   }));
 
   let serverPeer: RpcPeer | undefined;
-  const server = await startWebSocket({
-    protocol,
-    options: { port: 0, host: '127.0.0.1' },
+  const { accept } = await protocol.defineHost({
     configure(peer) {
       serverPeer = peer;
       peer.onRequest.ping(async ({ text }) => ({ text: text.toUpperCase() }));
     },
-  });
+  })();
+  const server = await startWebSocket({ accept, options: { port: 0, host: '127.0.0.1' } });
 
   const { port } = server.address() as AddressInfo;
   const client = await connectWebSocket(protocol, { url: `ws://127.0.0.1:${port}` });

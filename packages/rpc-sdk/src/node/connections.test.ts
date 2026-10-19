@@ -13,14 +13,13 @@ test('startSocket/connectSocket round-trip over a real TCP socket', async () => 
   }));
 
   let serverPeer: RpcPeer | undefined;
-  const server = await startSocket({
-    protocol,
-    options: { port: 0, host: '127.0.0.1' },
+  const { accept } = await protocol.defineHost({
     configure(peer) {
       serverPeer = peer;
       peer.onRequest.ping(async ({ text }) => ({ text: text.toUpperCase() }));
     },
-  });
+  })();
+  const server = await startSocket({ accept, options: { port: 0, host: '127.0.0.1' } });
 
   const { port } = server.address() as AddressInfo;
   const client = await connectSocket(protocol, { port, host: '127.0.0.1' });

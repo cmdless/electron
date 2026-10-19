@@ -28,13 +28,10 @@ export const createPort = defineDuplexConnection(PortMessageReader, PortMessageW
 // stdio only ever has exactly one peer for its whole lifetime (there's no
 // accept phase, unlike a WebSocketServer/net.Server), so unlike startWebSocket
 // there's no separate "handle" to return - the one peer it ever has, is it.
-export async function startStdio<P extends RpcProtocol>(
-  parameters: TransportParameters<P, never>,
-): Promise<RpcPeer<P['server']>> {
-  const { protocol, configure } = parameters;
-  const connection = createStdio();
-  const peer = protocol.createServer(connection);
-  configure?.(peer);
+export async function startStdio<T extends { listen: () => void }>(
+  parameters: TransportParameters<never, T>,
+): Promise<T> {
+  const peer = parameters.accept(createStdio());
   peer.listen();
   return peer;
 }
@@ -54,16 +51,11 @@ export function connectStdio<P extends RpcProtocol>(
   return protocol.createClient(connection);
 }
 
-export async function startSocket<P extends RpcProtocol>(
-  parameters: TransportParameters<P, ListenOptions>,
+export async function startSocket(
+  parameters: TransportParameters<ListenOptions>,
 ): Promise<Server> {
-  const { protocol, configure, options } = parameters;
-  const server = createServer(socket => {
-    const connection = createSocket(socket);
-    const peer = protocol.createServer(connection);
-    configure?.(peer);
-    peer.listen();
-  });
+  const { accept, options } = parameters;
+  const server = createServer(socket => accept(createSocket(socket)).listen());
 
   return new Promise((resolve, reject) => {
     const onListening = () => {
