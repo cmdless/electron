@@ -2,6 +2,7 @@ import 'vscode-jsonrpc/node'; // installs the Node runtime abstraction layer the
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defineProtocol } from './protocol.js';
+import { memory } from './state.js';
 import type { StateValues } from './protocol.js';
 import { createLoopbackPair, tick } from './loopback.fixture.js';
 
@@ -144,7 +145,7 @@ test('defineHost creates a store from state and shares it with every connection'
   }));
 
   const createCounterHost = protocol.defineHost({
-    state: async () => ({ count: 0 }),
+    state: { count: memory(0) },
     configure: (server, store) => {
       server.onRequest.increment(() => {
         store.update('count', count => count + 1);
@@ -176,7 +177,7 @@ test('createServer takes the store directly, for when there is no host', async (
   const protocol = defineProtocol(({ state }) => ({
     state: { count: state<number>('count') },
   }));
-  const store = await protocol.createStore(() => ({ count: 0 }));
+  const store = await protocol.createStore({ count: memory(0) });
   const { serverConn } = createLoopbackPair();
 
   const server = protocol.createServer(serverConn, store);

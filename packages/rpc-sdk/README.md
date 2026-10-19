@@ -95,9 +95,16 @@ const protocol = defineProtocol(({ side, request, state }) => ({
   state: { agents: state<{ entries: Record<string, { name: string }> }>('agents') },
 }));
 
-// server: `state` is required once the protocol declares channels
+// server: `state` is required once the protocol declares channels - one
+// storage per channel, saying where its state starts and where changes go
+import { memory } from '@cmdless/rpc-sdk';
+import { file } from '@cmdless/rpc-sdk/node';
+
 const createAgentsHost = protocol.defineHost({
-  state: async () => ({ agents: { entries: {} } }),
+  state: {
+    agents: file('/path/to/agents.json', { default: { entries: {} } }),
+    // or, for state that lives only as long as the host: memory({ entries: {} })
+  },
   configure: (server, store) => {
     server.onRequest.addAgent(({ id, name }) => store.update('agents', draft => { draft.entries[id] = { name }; }));
   },
@@ -113,6 +120,8 @@ stop();
 ```
 
 - The store is shared by every connection. `store.set({ channel: value })` replaces whole channels; `store.update(channel, draft => …)` edits a copy (or returns a replacement). Each change is diffed with `fast-json-patch`, and only that channel's subscribers get the patch.
+- Each channel's storage decides where its state comes from and goes to: `load()` gives the state the host starts from, and `save({ state, previous, ops })` gets every change. `memory(initial)` keeps nothing; `file(path, { default })` (from `@cmdless/rpc-sdk/node`) reads the JSON file at start (writing `default` if it's missing, and refusing to start on invalid JSON) and rewrites it after each change. Any `{ load, save? }` object works.
+- A change reaches subscribers at once; `set`/`update` return a promise that settles once it's saved, so a handler can `await` a durable change. Saves run one at a time per channel, and changes made during a save fold into a single save of the latest state.
 - Clients write through ordinary requests, never patches - the server is the only authority on its state.
 - Each channel's changes are numbered. A client that sees a gap resubscribes for a fresh state instead of applying a patch out of order.
 - Listeners on one connection share a single subscription; the last one to stop unsubscribes, and a closed connection drops all of its subscriptions.
@@ -200,8 +209,8 @@ stop();
 
 | Export | Contents |
 | --- | --- |
-| `@cmdless/rpc-sdk` | `defineProtocol`, the protocol/side/channel/peer types, state channel types and `createStore`, and `TransportParameters` |
+| `@cmdless/rpc-sdk` | `defineProtocol`, the protocol/side/channel/peer types, state channel types, `createStore` and `memory`, and `TransportParameters` |
 | `@cmdless/rpc-sdk/browser` | `createBrowser`, `connectBrowser` |
-| `@cmdless/rpc-sdk/node` | `createStream`, `createStdio`, `createSocket`, `createIPC`, `createPort`, `startStdio`, `connectStdio`, `startSocket`, `connectSocket` |
+| `@cmdless/rpc-sdk/node` | `createStream`, `createStdio`, `createSocket`, `createIPC`, `createPort`, `startStdio`, `connectStdio`, `startSocket`, `connectSocket`, `file` |
 | `@cmdless/rpc-sdk/ws` | `createWebSocket`, `waitForOpen`, `connectWebSocket` |
 | `@cmdless/rpc-sdk/ws/node` | `startWebSocket`, `waitForListening` |

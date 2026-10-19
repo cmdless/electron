@@ -3,7 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import jsonpatch from 'fast-json-patch';
 import { defineProtocol } from './protocol.js';
-import type { StatePatch } from './state.js';
+import { memory } from './state.js';
+import type { ChannelStorage, StateChange, StatePatch } from './state.js';
 import { createLoopbackPair, tick } from './loopback.fixture.js';
 
 type Agents = { entries: Record<string, { name: string }> };
@@ -15,9 +16,10 @@ const protocol = defineProtocol(({ state }) => ({
   },
 }));
 
-const createStore = () => protocol.createStore(async () => ({ agents: { entries: {} }, count: 0 }));
+const initial = () => ({ agents: memory<Agents>({ entries: {} }), count: memory(0) });
+const createStore = () => protocol.createStore(initial());
 
-test('createStore starts from what init resolves, at seq 0', async () => {
+test('createStore starts from what each channel loads, at seq 0', async () => {
   const store = await createStore();
   assert.deepEqual(store.state, { agents: { entries: {} }, count: 0 });
   assert.equal(store.seq('agents'), 0);
@@ -102,11 +104,77 @@ test('an unknown channel throws', async () => {
   assert.throws(() => store.set({ nope: 1 }), /unknown state channel: nope/);
 });
 
+// a storage that records its saves, and holds each one open until released
+function recording<T>(initial: T) {
+  const saves: StateChange<T>[] = [];
+  const pending: (() => void)[] = [];
+  const storage: ChannelStorage<T> = {
+    load: () => initial,
+    save: change => new Promise<void>(resolve => { saves.push(change); pending.push(resolve); }),
+  };
+  const release = () => pending.splice(0).forEach(resolve => resolve());
+  return { storage, saves, release };
+}
+
+test('a channel with storage saves every change, and set settles once it has', async () => {
+  const count = recording(0);
+  const store = await protocol.createStore({ agents: memory<Agents>({ entries: {} }), count: count.storage });
+
+  let settled = false;
+  const saved = store.set({ count: 1 }).then(() => { settled = true; });
+  await tick();
+  assert.deepEqual(count.saves, [{ state: 1, previous: 0, ops: [{ op: 'replace', path: '', value: 1 }] }]);
+  assert.equal(settled, false);
+
+  count.release();
+  await saved;
+  assert.equal(settled, true);
+});
+
+test('changes during a save fold into one save of the latest state', async () => {
+  const count = recording(0);
+  const store = await protocol.createStore({ agents: memory<Agents>({ entries: {} }), count: count.storage });
+
+  const first = store.set({ count: 1 });
+  await tick();
+  const second = store.set({ count: 2 });
+  const third = store.set({ count: 3 });
+  assert.equal(count.saves.length, 1);
+
+  count.release();
+  await first;
+  await tick();
+  assert.equal(count.saves.length, 2);
+  assert.deepEqual(count.saves[1].state, 3);
+  assert.deepEqual(count.saves[1].previous, 1);
+  assert.equal(count.saves[1].ops.length, 2);
+
+  count.release();
+  await Promise.all([second, third]);
+});
+
+test('a failed save rejects set, and leaves the change applied', async () => {
+  const store = await protocol.createStore({
+    agents: memory<Agents>({ entries: {} }),
+    count: { load: () => 0, save: () => { throw new Error('disk full'); } },
+  });
+  await assert.rejects(store.set({ count: 1 }), /disk full/);
+  assert.equal(store.state.count, 1);
+});
+
+test('memory starts each store from its own copy', async () => {
+  const shared = memory<Agents>({ entries: {} });
+  const one = await protocol.createStore({ agents: shared, count: memory(0) });
+  const two = await protocol.createStore({ agents: shared, count: memory(0) });
+  await one.update('agents', draft => { draft.entries.a = { name: 'A' }; });
+  assert.deepEqual(two.state.agents, { entries: {} });
+});
+
 // over a real (in-memory) connection: a host serving the store, and clients
 // mirroring it through subscribe
 
 async function createServing() {
-  const { store, accept } = await protocol.defineHost({ state: () => ({ agents: { entries: {} }, count: 0 }) })();
+  const { store, accept } = await protocol.defineHost({ state: initial() })();
 
   // counts the watches connections hold, to see subscriptions come and go
   let watching = 0;

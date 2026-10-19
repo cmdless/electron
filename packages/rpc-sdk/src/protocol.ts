@@ -2,7 +2,7 @@ import type { MessageConnection, Disposable } from "vscode-jsonrpc";
 import { NotificationType, RequestType } from "vscode-jsonrpc";
 import { MaybePromise } from "./shared.js";
 import { createStore, mirrorState, serveStore } from "./state.js";
-import type { ClientState, RpcStore } from "./state.js";
+import type { ClientState, RpcStore, StoreStorage } from "./state.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Any = any;
@@ -182,10 +182,10 @@ export type RpcHost<Channel extends RpcChannel, S extends Record<string, unknown
 
 // everything about a server that's the same for every connection: the
 // handlers each one gets, and - when the protocol declares state channels -
-// where their state starts
+// where each channel's state is kept (memory(), or file() from /node, ...)
 export type HostDefinition<Channel extends RpcChannel, S extends Record<string, unknown>> = {
   configure?: (server: RpcServer<Channel, S>, store: ServerStore<S>) => void;
-} & (HasState<S> extends true ? { state: () => MaybePromise<S> } : { state?: undefined });
+} & (HasState<S> extends true ? { state: StoreStorage<S> } : { state?: undefined });
 
 export type RpcProtocol<
   Client extends RpcChannel = RpcChannel,
@@ -202,7 +202,7 @@ export type RpcProtocol<
   // parameters are checked bivariantly, and these take state-typed args)
 
   // one store per server, shared by every connection to it
-  createStore(init: () => MaybePromise<StateValues<States>>): Promise<RpcStore<StateValues<States>>>;
+  createStore(storage: StoreStorage<StateValues<States>>): Promise<RpcStore<StateValues<States>>>;
 
   // one unconfigured server peer - what a host's accept is built on, and
   // what a test reaches for directly
@@ -228,11 +228,11 @@ function protocol<Client extends RpcChannel, Server extends RpcChannel, States e
     server,
     state,
     createClient(connection) { return createRpcClient<Client, S>(client, connection, state); },
-    createStore(init) { return createStore(state, init); },
+    createStore(storage) { return createStore(state, storage); },
     createServer,
-    defineHost({ configure, state: init }) {
+    defineHost({ configure, state: storage }) {
       return async () => {
-        const store = (init ? await createStore(state, init) : undefined) as ServerStore<S>;
+        const store = (storage ? await createStore(state, storage) : undefined) as ServerStore<S>;
         const accept = (connection: MessageConnection) => {
           const rpc = createServer(connection, ...([store] as ServerStoreArgs<S>));
           configure?.(rpc, store);

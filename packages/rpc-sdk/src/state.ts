@@ -23,15 +23,41 @@ export type RpcStore<S extends Record<string, unknown>> = {
   readonly state: Readonly<S>;
   seq: (channel: keyof S) => number;
   // replaces each given channel whole, like a shallow setState - a channel
-  // left out is untouched, and a deep edit goes through update instead
-  set: (partial: Partial<S>) => void;
+  // left out is untouched, and a deep edit goes through update instead.
+  // The change applies (and reaches subscribers) at once; what's returned
+  // settles once every changed channel's storage has saved it.
+  set: (partial: Partial<S>) => Promise<void>;
   // edits a copy of one channel's state; the draft is changed in place, or
   // a returned value replaces it
-  update: <K extends keyof S>(channel: K, edit: (draft: S[K]) => S[K] | void) => void;
+  update: <K extends keyof S>(channel: K, edit: (draft: S[K]) => S[K] | void) => Promise<void>;
   // what a connection's subscription hangs off: the state to start from,
   // and every patch after it
   watch: <K extends keyof S>(channel: K, listener: (patch: StatePatch) => void) => StateWatch<S[K]>;
 };
+
+// one change to a channel, as its storage sees it
+export type StateChange<T> = {
+  state: T;
+  previous: T;
+  ops: Operation[];
+};
+
+// where a channel's state comes from and goes to: load gives the state the
+// store starts from, and save (when there is one) is handed every change
+// (methods, not function properties, so a storage built from a narrower
+// literal - memory({ status: 'starting' }) - still fits its channel's type)
+export type ChannelStorage<T> = {
+  load(): MaybePromise<T>;
+  save?(change: StateChange<T>): MaybePromise<void>;
+};
+
+// a channel's storage for each of a protocol's state channels
+export type StoreStorage<S extends Record<string, unknown>> = { [K in keyof S]: ChannelStorage<S[K]> };
+
+// state that only lives as long as the store: starts as initial, saves nothing
+export function memory<T>(initial: T): ChannelStorage<T> {
+  return { load: () => structuredClone(initial) };
+}
 
 const isContainer = (value: unknown) => typeof value === 'object' && value !== null;
 
@@ -43,14 +69,48 @@ function diff(prev: unknown, next: unknown): Operation[] {
   return Object.is(prev, next) ? [] : [{ op: 'replace', path: '', value: next }];
 }
 
+// runs a channel's saves one at a time. Changes that arrive while a save is
+// running fold into a single next save of the latest state (with every op
+// and the earliest previous state), so a burst of changes is one write -
+// and each change's promise settles with the save that covered it.
+function createSaver<T>(save: (change: StateChange<T>) => MaybePromise<void>) {
+  let running: Promise<void> = Promise.resolve();
+  let queued: { change: StateChange<T>; saved: Promise<void> } | undefined;
+
+  return (change: StateChange<T>): Promise<void> => {
+    if (queued) {
+      queued.change = { state: change.state, previous: queued.change.previous, ops: [...queued.change.ops, ...change.ops] };
+      return queued.saved;
+    }
+    const entry = { change } as { change: StateChange<T>; saved: Promise<void> };
+    entry.saved = running.then(() => {
+      if (queued === entry) queued = undefined;
+      return save(entry.change);
+    });
+    queued = entry;
+    running = entry.saved.catch(() => { });
+    return entry.saved;
+  };
+}
+
 export async function createStore<C extends RpcStates>(
   channels: C,
-  init: () => MaybePromise<StateValues<C>>,
+  storage: StoreStorage<StateValues<C>>,
 ): Promise<RpcStore<StateValues<C>>> {
   type S = StateValues<C>;
-  const state = structuredClone(await init()) as S;
-  const seqs = new Map<keyof S, number>(Object.keys(channels).map(channel => [channel, 0]));
+  const names = Object.keys(channels) as (keyof S)[];
+  const state = {} as S;
+  const seqs = new Map<keyof S, number>();
+  const savers = new Map<keyof S, (change: StateChange<unknown>) => Promise<void>>();
   const listeners = new Map<keyof S, Set<(patch: StatePatch) => void>>();
+
+  for (const channel of names) {
+    const channelStorage = storage[channel];
+    if (!channelStorage) throw new Error(`no storage for state channel: ${String(channel)}`);
+    state[channel] = structuredClone(await channelStorage.load());
+    seqs.set(channel, 0);
+    if (channelStorage.save) savers.set(channel, createSaver(channelStorage.save.bind(channelStorage) as (change: StateChange<unknown>) => MaybePromise<void>));
+  }
 
   function assertChannel(channel: PropertyKey) {
     if (!seqs.has(channel as keyof S))
@@ -58,12 +118,14 @@ export async function createStore<C extends RpcStates>(
   }
 
   function set(partial: Partial<S>) {
+    const saves: Promise<void>[] = [];
     for (const channel of Object.keys(partial) as (keyof S)[]) {
       assertChannel(channel);
       // owned from here on, so a caller mutating what it passed in can't
       // change state behind the diff's back
       const next = structuredClone(partial[channel]) as S[keyof S];
-      const ops = diff(state[channel], next);
+      const previous = state[channel];
+      const ops = diff(previous, next);
       if (ops.length === 0) continue;
 
       state[channel] = next;
@@ -71,7 +133,15 @@ export async function createStore<C extends RpcStates>(
       seqs.set(channel, seq);
       for (const listener of listeners.get(channel) ?? [])
         listener({ seq, ops });
+
+      const save = savers.get(channel);
+      if (save) saves.push(save({ state: next, previous, ops }));
     }
+    // a caller that doesn't await this mustn't crash the process when a
+    // save fails - one that does still sees the error
+    const saved = Promise.all(saves).then(() => { });
+    saved.catch(() => { });
+    return saved;
   }
 
   return {
@@ -85,7 +155,7 @@ export async function createStore<C extends RpcStates>(
       assertChannel(channel);
       const draft = structuredClone(state[channel]);
       const result = edit(draft);
-      set({ [channel]: result === undefined ? draft : result } as unknown as Partial<S>);
+      return set({ [channel]: result === undefined ? draft : result } as unknown as Partial<S>);
     },
     watch(channel, listener) {
       assertChannel(channel);
