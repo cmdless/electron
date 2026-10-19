@@ -1,0 +1,36 @@
+{
+  "name": "@cmdless/hangar",
+  "description": "Hangar daemon: Hosts an AHP server and manages its plugins.",
+  "version": "0.0.1",
+  "license": "MIT",
+  "type": "module",
+  "author": {
+    "name": "Fluttershy",
+    "url": "https://github.com/Fluttershy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cmdless/electron.git"
+  },
+  "bin": {
+    "hangar": "./dist/bin.js"
+  },
+  "files": [
+    "dist/",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "prebuild": "rimraf dist node_modules/.tmp",
+    "build": "tsc -b",
+    "test": "node ../../scripts/run-tests.mjs"
+  },
+  "dependencies": {
+    "@ahpd/agent-acp": "0.12.0",
+    "@ahpd/agent-claude": "0.12.0",
+    "@ahpd/sdk": "0.12.0",
+    "@cmdless/core": "*",
+    "@cmdless/hangar-sdk": "*",
+    "@cmdless/rpc-sdk": "*"
+  }
+}

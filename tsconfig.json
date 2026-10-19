@@ -11,6 +11,9 @@
       "path": "./packages/core"
     },
     {
+      "path": "./packages/peerlink-sdk"
+    },
+    {
       "path": "./apps/ui"
     },
     {
@@ -18,6 +21,18 @@
     },
     {
       "path": "./apps/agent-runner"
+    },
+    {
+      "path": "./apps/peerlink"
+    },
+    {
+      "path": "./apps/peerlink-ui"
+    },
+    {
+      "path": "./packages/hangar-sdk"
+    },
+    {
+      "path": "./apps/hangar"
     }
   ]
 }

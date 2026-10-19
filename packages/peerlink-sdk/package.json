@@ -1,0 +1,47 @@
+{
+  "name": "@cmdless/peerlink-sdk",
+  "description": "Peerlink SDK: Offer and connect to services across devices, from both node and browser.",
+  "version": "0.0.1",
+  "license": "MIT",
+  "type": "module",
+  "author": {
+    "name": "Fluttershy",
+    "url": "https://github.com/Fluttershy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cmdless/electron.git"
+  },
+  "exports": {
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "import": "./dist/node/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "import": "./dist/browser/index.js"
+    },
+    "./ws": {
+      "types": "./dist/ws/index.d.ts",
+      "import": "./dist/ws/index.js"
+    },
+    "./ws/node": {
+      "types": "./dist/ws/node/index.d.ts",
+      "import": "./dist/ws/node/index.js"
+    },
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "prebuild": "rimraf dist node_modules/.tmp",
+    "build": "tsc -b",
+    "test": "node ../../scripts/run-tests.mjs"
+  }
+}
