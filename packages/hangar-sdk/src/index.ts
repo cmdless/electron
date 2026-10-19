@@ -19,8 +19,10 @@ export type HostState = {
   stale: boolean;
   // agents the running host couldn't serve, and why
   unavailable: Record<string, string>;
-  // where hangar keeps its configuration and data
+  // where hangar keeps its data (agents.json, the registry cache, sessions)
   dataPath: string;
+  // fetching the ACP registry: what's happening now, and the last failure
+  registry: { status: 'idle' | 'refreshing' | 'error'; error?: string };
 };
 
 // an agent from the ACP registry, run through its npx or uvx distribution
@@ -44,11 +46,9 @@ export type CustomAgentEntry = {
 
 export type AgentEntry = AcpRegistryAgentEntry | CustomAgentEntry;
 
-export type AgentsState = {
-  // served whatever the entries say
-  builtin: string[];
-  entries: Record<string, AgentEntry>;
-};
+// agents.json: every configured agent, by id. Claude is built in, and served
+// whatever this says.
+export type AgentsState = Record<string, AgentEntry>;
 
 type Distribution = {
   npx?: { package: string; args?: string[]; env?: Record<string, string> };
@@ -68,11 +68,9 @@ export type RegistryAgent = {
   distribution: Distribution;
 };
 
+// the last fetch of the ACP registry, as cached in acp-registry.json
 export type RegistryState = {
-  // cached: loaded from disk, not yet refreshed this run
-  status: 'empty' | 'cached' | 'refreshing' | 'fresh' | 'error';
   fetchedAt?: string;
-  error?: string;
   agents: Record<string, RegistryAgent>;
 };
 

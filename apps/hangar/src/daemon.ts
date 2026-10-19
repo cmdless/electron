@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import {
   createHost, listen, fileSessions, fileUsage, fileResources, shellTerminals,
@@ -10,28 +11,39 @@ import { claude } from '@ahpd/agent-claude';
 import { acpAgent } from '@ahpd/agent-acp';
 import type { AcpOptions } from '@ahpd/agent-acp';
 import { getAppDataPath, isPendingService, rejectService, resolveService } from '@cmdless/core/node';
-import { startSocket } from '@cmdless/rpc-sdk/node';
+import { memory } from '@cmdless/rpc-sdk';
 import type { Accept } from '@cmdless/rpc-sdk';
+import { file, startSocket } from '@cmdless/rpc-sdk/node';
 import { connectHangar, getHangarSocketPath, hangarProtocol } from '@cmdless/hangar-sdk/node';
-import type { AgentEntry, HangarService, RestartParams } from '@cmdless/hangar-sdk';
-import { expandHome, loadConfig, saveConfig } from './config.js';
-import type { HangarConfig } from './config.js';
-import { fetchRegistry, loadRegistryCache, resolveAgent } from './registry.js';
+import type { AgentsState, HangarService, RegistryAgent, RestartParams } from '@cmdless/hangar-sdk';
+import { defaultAgents, resolveAgent, validEntry } from './agents.js';
+import { fetchRegistry } from './registry.js';
 
 const dataPath = getAppDataPath('hangar');
+
+// hangar's own options - constants until something needs to set them
+const options = {
+  // what a change to the agents (or a registry refresh that changes what
+  // they resolve to) does: restart the host to apply it, or mark the host
+  // stale for a UI to offer the restart. A running turn always falls back
+  // to stale, so a change never cuts one off.
+  onAgentsChange: 'stale' as 'stale' | 'restart',
+  // the directories sessions may live in; the first is the default
+  workspaces: [os.homedir()],
+};
 
 // what a host is built from: every agent that can run, why the rest can't,
 // and a signature to tell whether a later config or registry would build a
 // different one
-function resolveAgents(config: HangarConfig, registry: Parameters<typeof resolveAgent>[1]) {
+function resolveAgents(entries: AgentsState, registry: Record<string, RegistryAgent>) {
   const agents: AcpOptions[] = [];
   const unavailable: Record<string, string> = {};
-  for (const entry of Object.values(config.agents)) {
+  for (const entry of Object.values(entries)) {
     const resolved = resolveAgent(entry, registry);
     if ('error' in resolved) unavailable[entry.id] = resolved.error;
     else agents.push(resolved);
   }
-  const workspaces = config.workspaces.map(expandHome);
+  const { workspaces } = options;
   return { agents, unavailable, workspaces, signature: JSON.stringify({ agents, workspaces }) };
 }
 
@@ -97,28 +109,34 @@ async function bindLock(accept: Accept): Promise<net.Server | undefined> {
 }
 
 async function main() {
-  const config = loadConfig(dataPath);
   let generation: Generation | undefined;
 
   const createHangarHost = hangarProtocol.defineHost({
-    state: () => ({
-      host: {
+    state: {
+      host: memory({
         pid: process.pid, status: 'starting', instanceId: '', ahpAddress: '',
-        stale: false, unavailable: {}, dataPath,
-      },
-      agents: { builtin: ['claude'], entries: config.agents },
-      registry: loadRegistryCache(dataPath),
-    }),
+        stale: false, unavailable: {}, dataPath, registry: { status: 'idle' },
+      }),
+      agents: file(path.join(dataPath, 'agents.json'), { default: defaultAgents }),
+      registry: file(path.join(dataPath, 'acp-registry.json'), { default: { agents: {} } }),
+    },
     configure: server => {
       server.onRequest.restart(params => restart(params));
-      server.onRequest.setAgent(({ entry }) => changeAgents(agents => { agents[entry.id] = validEntry(entry); }));
-      server.onRequest.removeAgent(({ id }) => changeAgents(agents => { delete agents[id]; }));
+      server.onRequest.setAgent(async ({ entry }) => {
+        const valid = validEntry(entry);
+        await store.update('agents', agents => { agents[valid.id] = valid; });
+        await reconcile();
+      });
+      server.onRequest.removeAgent(async ({ id }) => {
+        await store.update('agents', agents => { delete agents[id]; });
+        await reconcile();
+      });
       server.onRequest.refreshRegistry(() => refreshRegistry());
     },
   });
   const { store, accept } = await createHangarHost();
 
-  const resolveCurrent = () => resolveAgents(config, store.state.registry.agents);
+  const resolveCurrent = () => resolveAgents(store.state.agents, store.state.registry.agents);
 
   async function restart({ force }: RestartParams = {}) {
     const current = generation!;
@@ -130,40 +148,35 @@ async function main() {
       throw new Error(`${turning.length} session(s) have a turn running; restart with force to end them`);
     }
 
-    store.update('host', host => { host.status = 'restarting'; });
+    void store.update('host', host => { host.status = 'restarting'; });
     await closeGeneration(current);
     generation = createGeneration(resolveCurrent());
     const { instanceId, unavailable } = generation;
-    store.update('host', host => Object.assign(host, { status: 'ready', instanceId, unavailable, stale: false }));
+    void store.update('host', host => Object.assign(host, { status: 'ready', instanceId, unavailable, stale: false }));
   }
 
-  // marks the host stale when the config or registry would now build a
+  // marks the host stale when the agents or registry would now build a
   // different one - and, when configured to, restarts it. A running turn
   // refuses the restart, which leaves it stale for later.
   async function reconcile() {
     if (!generation) return;
     const stale = resolveCurrent().signature !== generation.signature;
-    store.update('host', host => { host.stale = stale; });
-    if (stale && config.onAgentsChange === 'restart')
+    void store.update('host', host => { host.stale = stale; });
+    if (stale && options.onAgentsChange === 'restart')
       await restart().catch(error => console.error('hangar: restart deferred:', error));
   }
 
-  async function changeAgents(edit: (agents: HangarConfig['agents']) => void) {
-    edit(config.agents);
-    saveConfig(dataPath, config);
-    store.update('agents', agents => { agents.entries = config.agents; });
-    await reconcile();
-  }
-
+  // fetched out of band and set whole: the registry channel's file storage
+  // caches it, and subscribers get the patch
   let refreshing: Promise<void> | undefined;
   function refreshRegistry() {
     refreshing ??= (async () => {
-      store.update('registry', registry => { registry.status = 'refreshing'; });
+      void store.update('host', host => { host.registry = { status: 'refreshing' }; });
       try {
-        const { fetchedAt, agents } = await fetchRegistry(dataPath);
-        store.set({ registry: { status: 'fresh', fetchedAt, agents } });
+        await store.set({ registry: await fetchRegistry() });
+        void store.update('host', host => { host.registry = { status: 'idle' }; });
       } catch (error) {
-        store.update('registry', registry => Object.assign(registry, { status: 'error', error: String(error) }));
+        void store.update('host', host => { host.registry = { status: 'error', error: String(error) }; });
       }
       await reconcile();
     })().finally(() => { refreshing = undefined; });
@@ -183,7 +196,7 @@ async function main() {
   // the first run has no cached registry, and registry agents can't resolve
   // without one - so that run waits for it, while any later run starts from
   // the cache and refreshes behind
-  const firstRun = store.state.registry.status === 'empty';
+  const firstRun = !store.state.registry.fetchedAt;
   const refreshed = refreshRegistry();
   if (firstRun) await refreshed;
 
@@ -205,7 +218,7 @@ async function main() {
   });
 
   const { instanceId, unavailable } = generation;
-  store.update('host', host => Object.assign(host, {
+  void store.update('host', host => Object.assign(host, {
     status: 'ready', instanceId, unavailable, ahpAddress: `ws://${listener.host}:${listener.port}`,
   }));
 
@@ -222,14 +235,6 @@ async function main() {
   process.on('SIGTERM', stop);
 
   if (isPendingService()) await resolveService(service);
-}
-
-// what a client sent, checked before it reaches the config file
-function validEntry(entry: AgentEntry): AgentEntry {
-  if (!entry?.id) throw new Error('an agent entry needs an id');
-  if (entry.kind === 'acp-registry' && entry.registryId) return { ...entry, version: entry.version || 'latest' };
-  if (entry.kind === 'custom' && entry.name && entry.command) return entry;
-  throw new Error(`not a valid agent entry: ${JSON.stringify(entry)}`);
 }
 
 main().catch(async error => {
