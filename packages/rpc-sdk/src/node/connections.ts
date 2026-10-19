@@ -12,7 +12,7 @@ import {
   PortMessageReader,
   PortMessageWriter,
 } from "vscode-jsonrpc/node";
-import type { ClientOf, RpcProtocol } from "../protocol.js";
+import type { ClientOf, ClientProtocol } from "../protocol.js";
 import type { TransportParameters } from "../shared.js";
 
 export const createStream = defineConnection(StreamMessageReader, StreamMessageWriter);
@@ -41,7 +41,7 @@ export type StdioConnectOptions = {
   args?: string[];
 };
 
-export function connectStdio<P extends RpcProtocol>(
+export function connectStdio<P extends ClientProtocol>(
   protocol: P,
   options: StdioConnectOptions,
 ): ClientOf<P> {
@@ -72,7 +72,7 @@ export async function startSocket(
   });
 }
 
-export async function connectSocket<P extends RpcProtocol>(
+export async function connectSocket<P extends ClientProtocol>(
   protocol: P,
   options: NetConnectOpts,
 ): Promise<ClientOf<P>> {

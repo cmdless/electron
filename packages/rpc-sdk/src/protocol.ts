@@ -142,8 +142,12 @@ export type RpcClient<Channel extends RpcChannel = RpcChannel, S extends Record<
 export type RpcServer<Channel extends RpcChannel = RpcChannel, S extends Record<string, unknown> = {}> =
   RpcPeer<Channel> & { state: ServerState<S> };
 
+// all a client side needs of a protocol - narrower than RpcProtocol, which
+// a protocol with state channels doesn't fit (its createServer needs a store)
+export type ClientProtocol = Pick<RpcProtocol, 'createClient'>;
+
 // the client a protocol creates, with its state channels typed
-export type ClientOf<P extends RpcProtocol> = ReturnType<P['createClient']>;
+export type ClientOf<P extends ClientProtocol> = ReturnType<P['createClient']>;
 
 function createRpcClient<Channel extends RpcChannel, S extends Record<string, unknown>>(
   channel: Channel,
@@ -192,12 +196,13 @@ export type RpcProtocol<
   server: Server;
   state: States;
   createClient: (connection: MessageConnection) => RpcClient<Client, StateValues<States>>;
-  // one store per server, shared by every connection to it
-  createStore: (init: () => MaybePromise<StateValues<States>>) => Promise<RpcStore<StateValues<States>>>;
 
-  // these two are methods, not function properties, so a specific protocol
+  // these are methods, not function properties, so a specific protocol
   // still fits where the generic RpcProtocol is asked for (method
   // parameters are checked bivariantly, and these take state-typed args)
+
+  // one store per server, shared by every connection to it
+  createStore(init: () => MaybePromise<StateValues<States>>): Promise<RpcStore<StateValues<States>>>;
 
   // one unconfigured server peer - what a host's accept is built on, and
   // what a test reaches for directly

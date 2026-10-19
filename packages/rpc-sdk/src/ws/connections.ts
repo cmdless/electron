@@ -1,7 +1,7 @@
 import { toSocket, WebSocketMessageReader, WebSocketMessageWriter } from 'vscode-ws-jsonrpc';
 import { createMessageConnection } from 'vscode-jsonrpc';
 import type { EitherWebSocket } from './shared.js';
-import type { ClientOf, RpcProtocol } from '../protocol.js';
+import type { ClientOf, ClientProtocol } from '../protocol.js';
 
 export async function waitForWebSocketOpen<T extends EitherWebSocket>(socket: T) {
   if (socket.readyState === WebSocket.OPEN)
@@ -46,7 +46,7 @@ export type WebSocketConnectOptions = {
   protocols?: string | string[];
 };
 
-export async function connectWebSocket<P extends RpcProtocol>(
+export async function connectWebSocket<P extends ClientProtocol>(
   protocol: P,
   options: WebSocketConnectOptions,
 ): Promise<ClientOf<P>> {
