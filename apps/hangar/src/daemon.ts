@@ -1,36 +1,38 @@
 import fs from 'node:fs';
 import net from 'node:net';
-import os from 'node:os';
 import path from 'node:path';
 import {
   createHost, listen, fileSessions, fileUsage, fileResources, shellTerminals,
   gitChanges, gitBranches, gitWorktrees, hostTools,
 } from '@ahpd/sdk';
-import type { Agent, Host, Peer } from '@ahpd/sdk';
+import type { Host, Peer } from '@ahpd/sdk';
 import { claude } from '@ahpd/agent-claude';
 import { acpAgent } from '@ahpd/agent-acp';
+import type { AcpOptions } from '@ahpd/agent-acp';
 import { getAppDataPath, isPendingService, rejectService, resolveService } from '@cmdless/core/node';
 import { startSocket } from '@cmdless/rpc-sdk/node';
 import type { Accept } from '@cmdless/rpc-sdk';
 import { connectHangar, getHangarSocketPath, hangarProtocol } from '@cmdless/hangar-sdk/node';
-import type { HangarInfo, HangarService, RestartParams } from '@cmdless/hangar-sdk';
-
-type HangarPeer = ReturnType<typeof hangarProtocol.createServer>;
+import type { AgentEntry, HangarService, RestartParams } from '@cmdless/hangar-sdk';
+import { expandHome, loadConfig, saveConfig } from './config.js';
+import type { HangarConfig } from './config.js';
+import { fetchRegistry, loadRegistryCache, resolveAgent } from './registry.js';
 
 const dataPath = getAppDataPath('hangar');
 
-// the directories sessions may live in - hardcoded until hangar has its own
-// configuration to read them from
-const workspaces = [os.homedir()];
-
-// hardcoded until hangar manages ahpd plugins. agent-acp's shipped presets
-// only apply through its plugin loader, so these spell out the same command.
-async function loadAgents(): Promise<Agent[]> {
-  return [
-    claude({ paths: workspaces }),
-    acpAgent({ provider: 'copilot', displayName: 'Copilot', command: 'copilot', args: ['--acp'], env: { COPILOT_AUTO_UPDATE: 'false' } }),
-    acpAgent({ provider: 'codex', displayName: 'Codex', command: 'npx', args: ['-y', '@agentclientprotocol/codex-acp'] }),
-  ];
+// what a host is built from: every agent that can run, why the rest can't,
+// and a signature to tell whether a later config or registry would build a
+// different one
+function resolveAgents(config: HangarConfig, registry: Parameters<typeof resolveAgent>[1]) {
+  const agents: AcpOptions[] = [];
+  const unavailable: Record<string, string> = {};
+  for (const entry of Object.values(config.agents)) {
+    const resolved = resolveAgent(entry, registry);
+    if ('error' in resolved) unavailable[entry.id] = resolved.error;
+    else agents.push(resolved);
+  }
+  const workspaces = config.workspaces.map(expandHome);
+  return { agents, unavailable, workspaces, signature: JSON.stringify({ agents, workspaces }) };
 }
 
 // one AHP host and every connection made to it. A restart throws the whole
@@ -39,13 +41,16 @@ async function loadAgents(): Promise<Agent[]> {
 type Generation = {
   host: Host;
   instanceId: string;
+  signature: string;
+  unavailable: Record<string, string>;
   connections: Set<{ peer: Peer; close(): void }>;
 };
 
-async function createGeneration(): Promise<Generation> {
+function createGeneration(resolved: ReturnType<typeof resolveAgents>): Generation {
+  const { agents, unavailable, workspaces, signature } = resolved;
   const host = createHost({
     path: workspaces[0],
-    agents: await loadAgents(),
+    agents: [claude({ paths: workspaces }), ...agents.map(acpAgent)],
     sessions: fileSessions({ dir: path.join(dataPath, 'sessions') }),
     usage: fileUsage({ folder: path.join(dataPath, 'usage') }),
     worktreesRoot: path.join(dataPath, 'worktrees'),
@@ -56,7 +61,7 @@ async function createGeneration(): Promise<Generation> {
     worktrees: gitWorktrees(),
     tools: hostTools(),
   });
-  return { host, instanceId: crypto.randomUUID(), connections: new Set() };
+  return { host, instanceId: crypto.randomUUID(), signature, unavailable, connections: new Set() };
 }
 
 async function closeGeneration({ host, connections }: Generation) {
@@ -92,14 +97,32 @@ async function bindLock(accept: Accept): Promise<net.Server | undefined> {
 }
 
 async function main() {
-  const clients = new Set<HangarPeer>();
+  const config = loadConfig(dataPath);
   let generation: Generation | undefined;
-  let ahpAddress = '';
 
-  const info = (): HangarInfo => ({ pid: process.pid, instanceId: generation!.instanceId, ahpAddress });
+  const createHangarHost = hangarProtocol.defineHost({
+    state: () => ({
+      host: {
+        pid: process.pid, status: 'starting', instanceId: '', ahpAddress: '',
+        stale: false, unavailable: {}, dataPath,
+      },
+      agents: { builtin: ['claude'], entries: config.agents },
+      registry: loadRegistryCache(dataPath),
+    }),
+    configure: server => {
+      server.onRequest.restart(params => restart(params));
+      server.onRequest.setAgent(({ entry }) => changeAgents(agents => { agents[entry.id] = validEntry(entry); }));
+      server.onRequest.removeAgent(({ id }) => changeAgents(agents => { delete agents[id]; }));
+      server.onRequest.refreshRegistry(() => refreshRegistry());
+    },
+  });
+  const { store, accept } = await createHangarHost();
+
+  const resolveCurrent = () => resolveAgents(config, store.state.registry.agents);
 
   async function restart({ force }: RestartParams = {}) {
     const current = generation!;
+    if (store.state.host.status !== 'ready') throw new Error(`hangar is ${store.state.host.status}`);
     current.host.refuseTurns('hangar is restarting');
     const turning = current.host.turning();
     if (turning.length > 0 && !force) {
@@ -107,25 +130,47 @@ async function main() {
       throw new Error(`${turning.length} session(s) have a turn running; restart with force to end them`);
     }
 
+    store.update('host', host => { host.status = 'restarting'; });
     await closeGeneration(current);
-    generation = await createGeneration();
-
-    for (const client of clients) {
-      try { client.notify.restarted(info()); }
-      catch { clients.delete(client); }
-    }
-    return info();
+    generation = createGeneration(resolveCurrent());
+    const { instanceId, unavailable } = generation;
+    store.update('host', host => Object.assign(host, { status: 'ready', instanceId, unavailable, stale: false }));
   }
 
-  const { accept } = await hangarProtocol.defineHost({
-    configure: peer => {
-      clients.add(peer);
-      peer.onRequest.info(() => info());
-      peer.onRequest.restart(params => restart(params));
-    },
-  })();
-  const lock = await bindLock(accept);
+  // marks the host stale when the config or registry would now build a
+  // different one - and, when configured to, restarts it. A running turn
+  // refuses the restart, which leaves it stale for later.
+  async function reconcile() {
+    if (!generation) return;
+    const stale = resolveCurrent().signature !== generation.signature;
+    store.update('host', host => { host.stale = stale; });
+    if (stale && config.onAgentsChange === 'restart')
+      await restart().catch(error => console.error('hangar: restart deferred:', error));
+  }
 
+  async function changeAgents(edit: (agents: HangarConfig['agents']) => void) {
+    edit(config.agents);
+    saveConfig(dataPath, config);
+    store.update('agents', agents => { agents.entries = config.agents; });
+    await reconcile();
+  }
+
+  let refreshing: Promise<void> | undefined;
+  function refreshRegistry() {
+    refreshing ??= (async () => {
+      store.update('registry', registry => { registry.status = 'refreshing'; });
+      try {
+        const { fetchedAt, agents } = await fetchRegistry(dataPath);
+        store.set({ registry: { status: 'fresh', fetchedAt, agents } });
+      } catch (error) {
+        store.update('registry', registry => Object.assign(registry, { status: 'error', error: String(error) }));
+      }
+      await reconcile();
+    })().finally(() => { refreshing = undefined; });
+    return refreshing;
+  }
+
+  const lock = await bindLock(accept);
   const service: HangarService = { address: getHangarSocketPath() };
 
   // another daemon won the race to the lock - it lives at the same address,
@@ -135,7 +180,14 @@ async function main() {
     return;
   }
 
-  generation = await createGeneration();
+  // the first run has no cached registry, and registry agents can't resolve
+  // without one - so that run waits for it, while any later run starts from
+  // the cache and refreshes behind
+  const firstRun = store.state.registry.status === 'empty';
+  const refreshed = refreshRegistry();
+  if (firstRun) await refreshed;
+
+  generation = createGeneration(resolveCurrent());
 
   // the address stays put across restarts: only the host behind it changes
   const listener = await listen({ port: 0, host: '127.0.0.1' }, (peer, principal, root) => {
@@ -151,7 +203,11 @@ async function main() {
       },
     };
   });
-  ahpAddress = `ws://${listener.host}:${listener.port}`;
+
+  const { instanceId, unavailable } = generation;
+  store.update('host', host => Object.assign(host, {
+    status: 'ready', instanceId, unavailable, ahpAddress: `ws://${listener.host}:${listener.port}`,
+  }));
 
   let stopping = false;
   async function stop() {
@@ -166,6 +222,14 @@ async function main() {
   process.on('SIGTERM', stop);
 
   if (isPendingService()) await resolveService(service);
+}
+
+// what a client sent, checked before it reaches the config file
+function validEntry(entry: AgentEntry): AgentEntry {
+  if (!entry?.id) throw new Error('an agent entry needs an id');
+  if (entry.kind === 'acp-registry' && entry.registryId) return { ...entry, version: entry.version || 'latest' };
+  if (entry.kind === 'custom' && entry.name && entry.command) return entry;
+  throw new Error(`not a valid agent entry: ${JSON.stringify(entry)}`);
 }
 
 main().catch(async error => {
