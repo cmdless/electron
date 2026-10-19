@@ -3,7 +3,7 @@ import {
   BrowserMessageReader,
   BrowserMessageWriter,
 } from "vscode-jsonrpc/browser";
-import type { RpcProtocol, RpcPeer } from "../protocol.js";
+import type { ClientOf, RpcProtocol } from "../protocol.js";
 
 type BrowserSource = ConstructorParameters<typeof BrowserMessageReader>[0];
 type BrowserTarget = ConstructorParameters<typeof BrowserMessageWriter>[0];
@@ -17,6 +17,6 @@ export function connectBrowser<P extends RpcProtocol>(
   protocol: P,
   source: BrowserSource,
   target: BrowserTarget = source as unknown as BrowserTarget,
-): RpcPeer<P['client']> {
-  return protocol.createClient(createBrowser(source, target));
+): ClientOf<P> {
+  return protocol.createClient(createBrowser(source, target)) as ClientOf<P>;
 }

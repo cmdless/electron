@@ -1,8 +1,10 @@
+import 'vscode-jsonrpc/node'; // installs the Node runtime abstraction layer the loopback tests run under
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import jsonpatch from 'fast-json-patch';
 import { defineProtocol } from './protocol.js';
 import type { StatePatch } from './state.js';
+import { createLoopbackPair, tick } from './loopback.fixture.js';
 
 type Agents = { entries: Record<string, { name: string }> };
 
@@ -98,4 +100,126 @@ test('an unknown channel throws', async () => {
   const store = await createStore();
   // @ts-expect-error - not a channel of this protocol
   assert.throws(() => store.set({ nope: 1 }), /unknown state channel: nope/);
+});
+
+// over a real (in-memory) connection: a host serving the store, and clients
+// mirroring it through subscribe
+
+async function createServing() {
+  const { store, accept } = await protocol.defineHost({ state: () => ({ agents: { entries: {} }, count: 0 }) })();
+
+  // counts the watches connections hold, to see subscriptions come and go
+  let watching = 0;
+  let watched = 0;
+  const watch = store.watch;
+  store.watch = (channel, listener) => {
+    watching++;
+    watched++;
+    const result = watch(channel, listener);
+    return { ...result, dispose: () => { watching--; result.dispose(); } };
+  };
+
+  const connect = () => {
+    const { clientConn, serverConn } = createLoopbackPair();
+    accept(serverConn).listen();
+    const client = protocol.createClient(clientConn);
+    client.listen();
+    return { client, clientConn, serverConn };
+  };
+  return { store, connect, watches: () => ({ watching, watched }) };
+}
+
+async function until(check: () => boolean) {
+  for (let i = 0; i < 100 && !check(); i++) await tick();
+  assert.ok(check(), 'timed out waiting');
+}
+
+test('subscribe gets the current state, then every change', async () => {
+  const { store, connect } = await createServing();
+  store.set({ agents: { entries: { a: { name: 'A' } } } });
+  const { client } = connect();
+
+  const seen: Agents[] = [];
+  await client.state.agents.subscribe(state => seen.push(state));
+  assert.deepEqual(seen, [{ entries: { a: { name: 'A' } } }]);
+
+  store.update('agents', draft => { draft.entries.b = { name: 'B' }; });
+  store.update('agents', draft => { delete draft.entries.a; });
+  await until(() => seen.length === 3);
+
+  assert.deepEqual(seen[2], { entries: { b: { name: 'B' } } });
+  assert.deepEqual(client.state.agents.current, store.state.agents);
+});
+
+test('a primitive channel mirrors too', async () => {
+  const { store, connect } = await createServing();
+  const { client } = connect();
+  await client.state.count.subscribe(() => { });
+  store.set({ count: 7 });
+  await until(() => client.state.count.current === 7);
+});
+
+test('listeners on one connection share a single subscription', async () => {
+  const { store, connect, watches } = await createServing();
+  const { client } = connect();
+
+  const first: number[] = [];
+  const second: number[] = [];
+  const stopFirst = await client.state.count.subscribe(count => first.push(count));
+  const stopSecond = await client.state.count.subscribe(count => second.push(count));
+  assert.deepEqual(watches(), { watching: 1, watched: 1 });
+
+  store.set({ count: 1 });
+  await until(() => first.length === 2 && second.length === 2);
+  assert.deepEqual([first, second], [[0, 1], [0, 1]]);
+
+  stopFirst();
+  await tick();
+  assert.equal(watches().watching, 1);
+
+  stopSecond();
+  await until(() => watches().watching === 0);
+  assert.equal(client.state.count.current, undefined);
+
+  store.set({ count: 2 });
+  await tick();
+  assert.deepEqual(second, [0, 1]);
+});
+
+test('each connection gets its own patches', async () => {
+  const { store, connect } = await createServing();
+  const one = connect().client;
+  const two = connect().client;
+  await one.state.count.subscribe(() => { });
+  await two.state.count.subscribe(() => { });
+
+  store.set({ count: 3 });
+  await until(() => one.state.count.current === 3 && two.state.count.current === 3);
+});
+
+test('a gap in seq resubscribes for a fresh state', async () => {
+  const { store, connect, watches } = await createServing();
+  const { client, serverConn } = connect();
+  await client.state.count.subscribe(() => { });
+
+  // the store moves on while a patch goes missing on the way
+  store.set({ count: 4 });
+  await until(() => client.state.count.current === 4);
+  store.set({ count: 5 });
+  await serverConn.sendNotification('$/state/patch', { channel: 'count', seq: store.seq('count') + 3, ops: [] });
+
+  await until(() => watches().watched === 2);
+  await until(() => client.state.count.current === 5);
+  assert.equal(watches().watching, 1);
+});
+
+test('a closed connection drops its subscriptions', async () => {
+  const { connect, watches } = await createServing();
+  const { client, serverConn } = connect();
+  await client.state.agents.subscribe(() => { });
+  await client.state.count.subscribe(() => { });
+  assert.equal(watches().watching, 2);
+
+  serverConn.dispose();
+  assert.equal(watches().watching, 0);
 });

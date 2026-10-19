@@ -3,26 +3,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { defineProtocol } from './protocol.js';
 import type { StateValues } from './protocol.js';
-import { createCallback } from './connections.js';
-import type { DataCallback } from './connections.js';
+import { createLoopbackPair, tick } from './loopback.fixture.js';
 
-function createLoopbackPair() {
-  let clientCallback: DataCallback | undefined;
-  let serverCallback: DataCallback | undefined;
 
-  const clientConn = createCallback(
-    { subscribe: callback => { clientCallback = callback; return () => { clientCallback = undefined; }; } },
-    { send: message => serverCallback?.(message) },
-  );
-  const serverConn = createCallback(
-    { subscribe: callback => { serverCallback = callback; return () => { serverCallback = undefined; }; } },
-    { send: message => clientCallback?.(message) },
-  );
-
-  return { clientConn, serverConn };
-}
-
-const tick = () => new Promise(resolve => setImmediate(resolve));
 
 test('a request round-trips with the correct params and result types', async () => {
   const protocol = defineProtocol(({ side, request }) => ({

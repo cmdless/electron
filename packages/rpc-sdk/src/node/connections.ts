@@ -12,7 +12,7 @@ import {
   PortMessageReader,
   PortMessageWriter,
 } from "vscode-jsonrpc/node";
-import type { RpcProtocol, RpcPeer } from "../protocol.js";
+import type { ClientOf, RpcProtocol } from "../protocol.js";
 import type { TransportParameters } from "../shared.js";
 
 export const createStream = defineConnection(StreamMessageReader, StreamMessageWriter);
@@ -44,11 +44,11 @@ export type StdioConnectOptions = {
 export function connectStdio<P extends RpcProtocol>(
   protocol: P,
   options: StdioConnectOptions,
-): RpcPeer<P['client']> {
+): ClientOf<P> {
   const child = spawn(options.command, options.args ?? [], { stdio: ['pipe', 'pipe', 'inherit'] });
   const connection = createStream(child.stdout, child.stdin);
   connection.onDispose(() => child.kill());
-  return protocol.createClient(connection);
+  return protocol.createClient(connection) as ClientOf<P>;
 }
 
 export async function startSocket(
@@ -75,7 +75,7 @@ export async function startSocket(
 export async function connectSocket<P extends RpcProtocol>(
   protocol: P,
   options: NetConnectOpts,
-): Promise<RpcPeer<P['client']>> {
+): Promise<ClientOf<P>> {
   const socket = createConnection(options);
 
   await new Promise<void>((resolve, reject) => {
@@ -91,5 +91,5 @@ export async function connectSocket<P extends RpcProtocol>(
     socket.once('error', onError);
   });
 
-  return protocol.createClient(createSocket(socket));
+  return protocol.createClient(createSocket(socket)) as ClientOf<P>;
 }

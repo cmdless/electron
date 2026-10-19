@@ -70,6 +70,54 @@ Every peer returned by `createClient`/`createServer` exposes:
 
 Types flow end to end: the `params`/`result` types for `ping` above come straight from the `request<{ text: string }, { text: string }>('ping')` declaration, on both the client and server peer.
 
+## Hosting a server
+
+`protocol.defineHost` defines everything about a server that's the same for every connection, once. Calling what it returns starts one: a `store` (when the protocol has state channels, below) and an `accept(connection)` that turns each connection into a configured server peer. Transports only ever take that `accept`:
+
+```ts
+export const createPingHost = protocol.defineHost({
+  configure: server => {
+    server.onRequest.ping(async ({ text }) => ({ text: text.toUpperCase() }));
+  },
+});
+
+const { accept } = await createPingHost();
+await startWebSocket({ accept, options: { port: 8080 } });
+```
+
+## State channels
+
+A protocol can declare named pieces of server-owned state beside its sides. Clients subscribe to a channel, get its current state, and are kept up to date with [JSON Patch](https://datatracker.ietf.org/doc/html/rfc6902) deltas:
+
+```ts
+const protocol = defineProtocol(({ side, request, state }) => ({
+  clientToServer: side({ requests: { addAgent: request<{ id: string; name: string }, void>('agents/add') } }),
+  state: { agents: state<{ entries: Record<string, { name: string }> }>('agents') },
+}));
+
+// server: `state` is required once the protocol declares channels
+const createAgentsHost = protocol.defineHost({
+  state: async () => ({ agents: { entries: {} } }),
+  configure: (server, store) => {
+    server.onRequest.addAgent(({ id, name }) => store.update('agents', draft => { draft.entries[id] = { name }; }));
+  },
+});
+const { store, accept } = await createAgentsHost();
+
+// client, anywhere
+const client = protocol.createClient(connection);
+client.listen();
+const stop = await client.state.agents.subscribe(agents => render(agents));
+client.state.agents.current; // the latest state, while subscribed
+stop();
+```
+
+- The store is shared by every connection. `store.set({ channel: value })` replaces whole channels; `store.update(channel, draft => …)` edits a copy (or returns a replacement). Each change is diffed with `fast-json-patch`, and only that channel's subscribers get the patch.
+- Clients write through ordinary requests, never patches - the server is the only authority on its state.
+- Each channel's changes are numbered. A client that sees a gap resubscribes for a fresh state instead of applying a patch out of order.
+- Listeners on one connection share a single subscription; the last one to stop unsubscribes, and a closed connection drops all of its subscriptions.
+- On the wire this is `$/state/subscribe`, `$/state/unsubscribe` and `$/state/patch`, reserved so they can't collide with a protocol's own methods.
+
 ## Transports
 
 - **`@cmdless/rpc-sdk/browser`** — `createBrowser(source, target?)` wraps `vscode-jsonrpc/browser`'s `BrowserMessageReader`/`BrowserMessageWriter` around anything shaped like a `postMessage`/`addEventListener('message')` endpoint into a `MessageConnection`. Fits a `Worker`, a `MessagePort`, or a WebView2 message bridge. Pass one endpoint if it serves as both source and target, or a separate source/target pair.
@@ -152,7 +200,7 @@ Types flow end to end: the `params`/`result` types for `ping` above come straigh
 
 | Export | Contents |
 | --- | --- |
-| `@cmdless/rpc-sdk` | `defineProtocol`, the protocol/side/channel/peer types, and `TransportParameters` |
+| `@cmdless/rpc-sdk` | `defineProtocol`, the protocol/side/channel/peer types, state channel types and `createStore`, and `TransportParameters` |
 | `@cmdless/rpc-sdk/browser` | `createBrowser`, `connectBrowser` |
 | `@cmdless/rpc-sdk/node` | `createStream`, `createStdio`, `createSocket`, `createIPC`, `createPort`, `startStdio`, `connectStdio`, `startSocket`, `connectSocket` |
 | `@cmdless/rpc-sdk/ws` | `createWebSocket`, `waitForOpen`, `connectWebSocket` |

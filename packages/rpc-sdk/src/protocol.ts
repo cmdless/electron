@@ -1,8 +1,8 @@
 import type { MessageConnection, Disposable } from "vscode-jsonrpc";
 import { NotificationType, RequestType } from "vscode-jsonrpc";
 import { MaybePromise } from "./shared.js";
-import { createStore } from "./state.js";
-import type { RpcStore } from "./state.js";
+import { createStore, mirrorState, serveStore } from "./state.js";
+import type { ClientState, RpcStore } from "./state.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Any = any;
@@ -137,12 +137,20 @@ export type ServerState<S extends Record<string, unknown>> =
   ? Pick<RpcStore<S>, 'set' | 'update'> & { readonly current: Readonly<S> }
   : {};
 
-export type RpcClient<Channel extends RpcChannel = RpcChannel> = RpcPeer<Channel>;
+export type RpcClient<Channel extends RpcChannel = RpcChannel, S extends Record<string, unknown> = {}> =
+  RpcPeer<Channel> & { state: ClientState<S> };
 export type RpcServer<Channel extends RpcChannel = RpcChannel, S extends Record<string, unknown> = {}> =
   RpcPeer<Channel> & { state: ServerState<S> };
 
-function createRpcClient<Channel extends RpcChannel>(channel: Channel, connection: MessageConnection): RpcClient<Channel> {
-  return peer(channel, connection);
+// the client a protocol creates, with its state channels typed
+export type ClientOf<P extends RpcProtocol> = ReturnType<P['createClient']>;
+
+function createRpcClient<Channel extends RpcChannel, S extends Record<string, unknown>>(
+  channel: Channel,
+  connection: MessageConnection,
+  states: RpcStates,
+): RpcClient<Channel, S> {
+  return { ...peer(channel, connection), state: mirrorState<S>(connection, states) };
 }
 
 function createRpcServer<Channel extends RpcChannel, S extends Record<string, unknown>>(
@@ -150,6 +158,7 @@ function createRpcServer<Channel extends RpcChannel, S extends Record<string, un
   connection: MessageConnection,
   store: ServerStore<S>,
 ): RpcServer<Channel, S> {
+  if (store) serveStore(connection, store);
   const state = store
     ? { get current() { return store.state; }, set: store.set, update: store.update }
     : {};
@@ -182,7 +191,7 @@ export type RpcProtocol<
   client: Client;
   server: Server;
   state: States;
-  createClient: (connection: MessageConnection) => RpcClient<Client>;
+  createClient: (connection: MessageConnection) => RpcClient<Client, StateValues<States>>;
   // one store per server, shared by every connection to it
   createStore: (init: () => MaybePromise<StateValues<States>>) => Promise<RpcStore<StateValues<States>>>;
 
@@ -213,7 +222,7 @@ function protocol<Client extends RpcChannel, Server extends RpcChannel, States e
     client,
     server,
     state,
-    createClient(connection) { return createRpcClient(client, connection); },
+    createClient(connection) { return createRpcClient<Client, S>(client, connection, state); },
     createStore(init) { return createStore(state, init); },
     createServer,
     defineHost({ configure, state: init }) {
