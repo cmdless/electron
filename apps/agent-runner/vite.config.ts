@@ -2,9 +2,9 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
-import { CmdlessEnv } from '@cmdless/ui-sdk/node'
+import { setCmdlessUrl } from '@cmdless/ui-sdk/node'
 
-// Publishes the dev server's own URL under CmdlessEnv.url, then runs this
+// Publishes the dev server's own URL via setCmdlessUrl, then runs this
 // project's own node-side bin directly from source (via tsx, so no prior
 // build or install is needed) with that env var set - so "dev": "vite"
 // alone runs the whole app end to end, pointed at the dev server instead
@@ -20,10 +20,12 @@ function cmdless(): Plugin {
         const url = server.resolvedUrls?.local?.[0];
         if (!url) return;
 
+        const env = { ...process.env };
+        setCmdlessUrl(url, env);
         child = spawn(process.execPath, ['--import', 'tsx', entry], {
           cwd: server.config.root,
           stdio: 'inherit',
-          env: { ...process.env, [CmdlessEnv.URL_KEY]: url },
+          env,
         });
         child.on('error', e => server.config.logger.error(`[cmdless] failed to spawn ${entry}: ${e}`));
         child.once('exit', (code, signal) => {

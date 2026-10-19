@@ -8,6 +8,9 @@
       "path": "./packages/rpc-sdk"
     },
     {
+      "path": "./packages/core"
+    },
+    {
       "path": "./apps/ui"
     },
     {

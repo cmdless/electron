@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CmdlessUI, CmdlessEnv, createShowCommand, getPackageName } from './utils.js';
+import { CmdlessUI, createShowCommand, getCmdlessUrl, getPackageName, setCmdlessUrl } from './utils.js';
 import type * as types from '../types.js';
 
 test('getPackageName splits a scoped specifier with a version', () => {
@@ -68,12 +68,12 @@ test('createShowCommand: a dev CMDLESS_URL override preserves the original sourc
     dispatcher,
   });
 
-  const originalUrl = CmdlessEnv.url;
-  CmdlessEnv.url = 'http://localhost:5173/';
+  const originalUrl = getCmdlessUrl();
+  setCmdlessUrl('http://localhost:5173/');
   try {
     await show();
   } finally {
-    CmdlessEnv.url = originalUrl;
+    setCmdlessUrl(originalUrl);
   }
 
   assert.equal(seen?.type, 'url');
@@ -92,12 +92,12 @@ test('createShowCommand: a dev CMDLESS_URL override with no hash in the original
     dispatcher,
   });
 
-  const originalUrl = CmdlessEnv.url;
-  CmdlessEnv.url = 'http://localhost:5173/';
+  const originalUrl = getCmdlessUrl();
+  setCmdlessUrl('http://localhost:5173/');
   try {
     await show();
   } finally {
-    CmdlessEnv.url = originalUrl;
+    setCmdlessUrl(originalUrl);
   }
 
   assert.equal(seen?.source, 'http://localhost:5173/');

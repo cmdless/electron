@@ -1,24 +1,24 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { findPackageJSON } from "node:module";
 import { execFileSync, spawn } from 'node:child_process';
+import type { SpawnOptions } from 'node:child_process';
 import * as types from '../types.js';
 import { defineProtocol, RpcProtocol } from '@cmdless/rpc-sdk';
 import { startWebSocket, closeWebSocketServer, getWebSocketUrl } from '@cmdless/rpc-sdk/ws/node';
 import { startSocket, connectSocket } from '@cmdless/rpc-sdk/node';
+import { getCmdlessRoot, getTmpSocketPath, setCmdlessRoot } from '@cmdless/core/node';
 import type { McpHandle } from './app.js';
+
+const APP_KEY = 'CMDLESS_APP';
+const URL_KEY = 'CMDLESS_URL';
+const BIN_SOCKET_KEY = 'CMDLESS_BIN_SOCKET';
 
 export function getEphemeralPrefix() {
   return '.cmdless.ui/';
 }
 
-export function getTmpSocketPath(app: string) {
-  const pipeName = `${app}.sock`;
-  return process.platform === 'win32'
-    ? path.join('\\\\.\\pipe', pipeName)
-    : path.join(os.tmpdir(), pipeName);
-}
+export { getTmpSocketPath, getCmdlessRoot, setCmdlessRoot } from '@cmdless/core/node';
 
 export type BinResolve = { type: 'resolve'; value: unknown };
 export type BinCleanup = { type: 'cleanup'; appName: string; userData: string };
@@ -40,8 +40,6 @@ const binProtocol = defineProtocol(({ side, notification }) => ({
 // parent calls start() before spawning (folding the socket path into the
 // child's env), and the child calls connect() to get a send function back.
 export class BinChannel {
-  static readonly SOCKET_KEY = 'CMDLESS_BIN_SOCKET';
-
   static async start(onMessage: (message: BinMessage) => void) {
     const socketPath = getTmpSocketPath(crypto.randomUUID());
     const server = await startSocket({
@@ -51,7 +49,7 @@ export class BinChannel {
     });
 
     return {
-      env: { ...process.env, [BinChannel.SOCKET_KEY]: socketPath },
+      env: { ...process.env, [BIN_SOCKET_KEY]: socketPath },
       close: () => new Promise<void>((resolve, reject) => {
         server.close(error => error ? reject(error) : resolve());
       }),
@@ -59,8 +57,8 @@ export class BinChannel {
   }
 
   static async connect(): Promise<(message: BinMessage) => void> {
-    const socketPath = process.env[BinChannel.SOCKET_KEY];
-    if (socketPath) delete process.env[BinChannel.SOCKET_KEY];
+    const socketPath = process.env[BIN_SOCKET_KEY];
+    if (socketPath) delete process.env[BIN_SOCKET_KEY];
     if (!socketPath)
       throw new Error('BinChannel.connect: no socket to connect to (missing CMDLESS_BIN_SOCKET) - was this launched via BinChannel.start()?');
 
@@ -74,28 +72,77 @@ export function binOutput<T>(value?: T) {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
-export class CmdlessEnv {
-  static readonly ROOT_KEY = 'CMDLESS_ROOT';
-  static readonly APP_KEY = 'CMDLESS_APP';
-  static readonly URL_KEY = 'CMDLESS_URL';
-  static get root() { return process.env[CmdlessEnv.ROOT_KEY] ?? ''; }
-  static get app() { return process.env[CmdlessEnv.APP_KEY] ?? ''; }
-  static set app(app: string) { process.env[CmdlessEnv.APP_KEY] = app; }
-  static get url() { return process.env[CmdlessEnv.URL_KEY] ?? ''; }
-  static set url(url: string) { process.env[CmdlessEnv.URL_KEY] = url; }
+export type RunAsBinOptions = Omit<SpawnOptions, 'stdio'>;
+
+// spawns `command` as a bin that reports back over BinChannel (e.g.
+// ui-runtime's Electron child), hiding the whole dance: wiring the socket
+// into its env, cleaning up the ephemeral userData dir once it's reported,
+// forwarding signals, and tearing the channel down on exit. stdio is fixed
+// (no 'ipc' slot - see BinChannel's own comment), so it's the one thing
+// callers can't override. Resolves to the resolved value, formatted via
+// binOutput ('' if the child never resolved one) - it's handed back rather
+// than written to this process's own stdout, since stdout is a *bin* file's
+// concept (its own caller expects it there), not something every runAsBin
+// caller wants: a programmatic caller just wants the value.
+export async function runAsBin(command: string, args: string[], opts: RunAsBinOptions = {}): Promise<string> {
+  let cleanupUserData: string | undefined;
+  let output = '';
+  const channel = await BinChannel.start(message => {
+    if (message.type === 'cleanup') {
+      cleanupUserData = message.userData;
+      return;
+    }
+    if (message.value !== null) output = binOutput(message.value);
+  });
+
+  const socketPath = channel.env[BIN_SOCKET_KEY];
+  const env = { ...(opts.env ?? process.env), [BIN_SOCKET_KEY]: socketPath };
+  const child = spawn(command, args, { ...opts, env, stdio: ['inherit', 'pipe', 'inherit'] });
+  child.stdout?.pipe(process.stderr);
+  forwardSignals(child);
+
+  return new Promise<string>((resolve, reject) => {
+    child.once('exit', code => {
+      if (cleanupUserData) fs.rmSync(cleanupUserData, { recursive: true, force: true });
+      process.exitCode = code ?? 1;
+      channel.close().catch(() => { });
+      resolve(output);
+    });
+    child.once('error', reject);
+  });
+}
+
+// the setters below write to this process's env by default, or - given an
+// env to spawn with - only to a child's; an empty value removes the key.
+function setEnv(key: string, value: string, env: NodeJS.ProcessEnv) {
+  if (value) env[key] = value;
+  else delete env[key];
+}
+
+// the app name, which groups processes under one userData
+export function getCmdlessApp() {
+  return process.env[APP_KEY] ?? '';
+}
+
+export function setCmdlessApp(app: string, env: NodeJS.ProcessEnv = process.env) {
+  setEnv(APP_KEY, app, env);
+}
+
+// a dev server's URL, which createShowCommand shows instead of params()'s
+export function getCmdlessUrl() {
+  return process.env[URL_KEY] ?? '';
+}
+
+export function setCmdlessUrl(url: string, env: NodeJS.ProcessEnv = process.env) {
+  setEnv(URL_KEY, url, env);
 }
 
 // deletes the env var once read, so a later process spawned down the line
 // (which inherits process.env) doesn't also see it and keep swapping to it.
 export function acquireCmdlessUrl() {
-  const url = CmdlessEnv.url;
-  if (url) delete process.env[CmdlessEnv.URL_KEY];
+  const url = getCmdlessUrl();
+  if (url) delete process.env[URL_KEY];
   return url;
-}
-
-export function getDefaultCmdlessRoot() {
-  return CmdlessEnv.root
-    ?? path.join(os.homedir(), '.cmdless');
 }
 
 export function getInstallPath(cmdlessRoot: string) {
@@ -126,7 +173,7 @@ export function getPackageName(specifier: string) {
 
 export async function getPrefix(parameters: PackageInstallParams) {
   const { packageName, packageVersion } = getPackageName(parameters.specifier);
-  const cmdlessRoot = parameters.cmdlessRoot ?? getDefaultCmdlessRoot();
+  const cmdlessRoot = parameters.cmdlessRoot ?? getCmdlessRoot();
   const installPath = getInstallPath(cmdlessRoot);
   const version = packageVersion ?? parameters.version ?? await getLatestPackageVersion(packageName);
   const prefix = path.join(installPath, packageName, version);
@@ -169,7 +216,9 @@ export async function ensurePackage(parameters: PackageInstallParams) {
 }
 
 function execPackageEnv(cmdlessRoot?: string): NodeJS.ProcessEnv {
-  return { ...process.env, ...(cmdlessRoot ? { [CmdlessEnv.ROOT_KEY]: cmdlessRoot } : {}) };
+  const env = { ...process.env };
+  if (cmdlessRoot) setCmdlessRoot(cmdlessRoot, env);
+  return env;
 }
 
 function execPackageArgs(packageName: string, prefix: string, args: string[]) {
@@ -229,7 +278,7 @@ export async function runAsRuntime(meta: ImportMeta, args: string[] = [], cmdles
   const specifier = '@cmdless/ui-runtime';
   const binPath = findLocalBinPath(specifier, meta);
   if (binPath) {
-    const root = cmdlessRoot ?? getDefaultCmdlessRoot();
+    const root = cmdlessRoot ?? getCmdlessRoot();
     return execProcess(process.execPath, [binPath, ...args], execPackageEnv(root));
   }
   const version = await getMetaPackageVersion('@cmdless/ui-sdk', meta);
@@ -372,7 +421,7 @@ export function createShowCommand<In = void, Out = string, P extends RpcProtocol
     };
 
     // a dev server (e.g. a vite plugin) can publish its own URL under
-    // CmdlessEnv.url - when present, it always wins over whatever params()
+    // setCmdlessUrl - when present, it always wins over whatever params()
     // returned, so individual show commands never have to check for it.
     // params()'s own source may carry a hash route (e.g. for a single-page
     // renderer with multiple top-level views) - that's preserved onto the

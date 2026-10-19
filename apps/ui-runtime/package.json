@@ -26,14 +26,14 @@
     "test": "node ../../scripts/run-tests.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "commander": "15.0.0",
     "@electron-toolkit/utils": "4.0.0",
     "@cmdless/ui-sdk": "*",
     "@cmdless/ensure-electron": "0.0.6"
   },
   "devDependencies": {
-    "electron": "43.3.0",
+    "electron": "44.7.2",
     "electron-vite": "^5.0.0",
     "vite": "^7.3.6"
   }

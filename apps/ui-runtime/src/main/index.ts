@@ -4,7 +4,7 @@ import { app, shell, BrowserWindow, dialog } from 'electron';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import { Argument, Command } from 'commander';
 import { cmdlessIPC, createElectronIPC, types } from '@cmdless/ui-sdk';
-import { getEphemeralPrefix, CmdlessEnv, CmdlessUI, binOutput, MessageSocketWaiter, BinChannel, runAsMcp } from '@cmdless/ui-sdk/node';
+import { getEphemeralPrefix, getCmdlessApp, setCmdlessApp, CmdlessUI, binOutput, MessageSocketWaiter, BinChannel, runAsMcp } from '@cmdless/ui-sdk/node';
 import type { BinResolve, BinCleanup, McpHandle } from '@cmdless/ui-sdk/node';
 import { asElectronIPC } from '@cmdless/rpc-sdk';
 
@@ -160,8 +160,9 @@ function handle(parameters: types.Params, finish = resolve, parent?: BrowserWind
 
 async function run(parameters: types.Params, finish = resolve) {
   // --app <name> takes precedence, otherwise ephemeral
-  const appName = parameters.app || CmdlessEnv.app || `${getEphemeralPrefix()}${crypto.randomUUID()}`;
-  parameters.app = CmdlessEnv.app = appName;
+  const appName = parameters.app || getCmdlessApp() || `${getEphemeralPrefix()}${crypto.randomUUID()}`;
+  parameters.app = appName;
+  setCmdlessApp(appName);
 
   app.setName(appName);
   app.setPath('userData', path.join(app.getPath('appData'), appName));

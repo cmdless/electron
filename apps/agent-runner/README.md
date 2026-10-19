@@ -33,7 +33,7 @@ Renderer and node code live side by side under `src/`, built by two completely s
 
 ## Commands
 
-- `npm run dev` — starts the Vite dev server, then (once it's actually listening) spawns `src/node/bin.ts` directly from source via `tsx` — no prior build needed — with the dev server's own URL published under `CmdlessEnv.url`, so the whole app runs end to end pointed at the dev server instead of the built renderer. See the `cmdless()` plugin in `vite.config.ts`.
+- `npm run dev` — starts the Vite dev server, then (once it's actually listening) spawns `src/node/bin.ts` directly from source via `tsx` — no prior build needed — with the dev server's own URL published via `setCmdlessUrl`, so the whole app runs end to end pointed at the dev server instead of the built renderer. See the `cmdless()` plugin in `vite.config.ts`.
 - `npm run build` — `tsc -b` (node side → `out/`) then `vite build` (renderer → `dist/`).
 
 ## Dev loop signal handling
