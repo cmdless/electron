@@ -36,6 +36,12 @@
     },
     {
       "path": "./apps/hangar-ui"
+    },
+    {
+      "path": "./packages/auth-sdk"
+    },
+    {
+      "path": "./apps/auth"
     }
   ]
 }
