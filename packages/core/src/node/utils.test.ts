@@ -44,6 +44,8 @@ test('listenExclusive lets only one server hold a socket', async () => {
   try {
     assert.equal(await listenExclusive(first, socketPath), true);
     assert.equal(await listenExclusive(second, socketPath), false);
+    if (process.platform !== 'win32')
+      assert.equal(fs.statSync(socketPath).mode & 0o777, 0o600);
   } finally {
     first.close();
     second.close();
