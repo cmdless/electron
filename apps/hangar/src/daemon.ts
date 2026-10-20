@@ -2,7 +2,6 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   createHost, listen, fileSessions, fileUsage, fileResources, shellTerminals,
   gitChanges, gitBranches, gitWorktrees, hostTools,
@@ -16,7 +15,8 @@ import { memory } from '@cmdless/rpc-sdk';
 import { createSocketServer, file } from '@cmdless/rpc-sdk/node';
 import { startWebSocket, closeWebSocketServer } from '@cmdless/rpc-sdk/ws/node';
 import { getHangarSocketPath, hangarProtocol } from '@cmdless/hangar-sdk/node';
-import { connectPeerlink, ensurePeerlink } from '@cmdless/peerlink-sdk/node';
+import { offer } from '@cmdless/peerlink-sdk/node';
+import type { OfferParams } from '@cmdless/peerlink-sdk';
 import type { AgentsState, HangarService, RegistryAgent, RestartParams } from '@cmdless/hangar-sdk';
 import { defaultAgents, resolveAgent, validEntry } from './agents.js';
 import { fetchRegistry } from './registry.js';
@@ -243,24 +243,22 @@ async function main() {
   if (isPendingService()) await resolveService(service);
 
   // offers both addresses on this device's peerlink, starting it the first
-  // time. The offers last as long as this connection, so if peerlink goes
-  // away hangar reconnects and offers again - without starting it, so
-  // stopping peerlink on purpose sticks.
-  const peerlinkDaemonPath = fileURLToPath(import.meta.resolve('@cmdless/peerlink/daemon'));
-  const offerOnPeerlink = async (start: boolean) => {
+  // time. An offer lasts as long as its connection, so if peerlink goes away
+  // hangar offers again once it's back - without starting it, so stopping
+  // peerlink on purpose sticks.
+  const keepOffered = async (params: OfferParams, start: boolean) => {
     if (stopping) return;
+    const retry = () => { if (!stopping) setTimeout(() => keepOffered(params, false), 5_000); };
     try {
-      const peerlink = start ? await ensurePeerlink(peerlinkDaemonPath) : await connectPeerlink();
-      peerlink.onClose(() => { if (!stopping) setTimeout(() => offerOnPeerlink(false), 5_000); });
-      const { webSocketAddress, ahpAddress } = store.state.host;
-      await peerlink.request.offer({ kind: 'hangar', name: 'hangar', address: webSocketAddress });
-      await peerlink.request.offer({ kind: 'ahp', name: 'hangar (AHP)', address: ahpAddress });
+      (await offer(params, { start })).onClose(retry);
     } catch (error) {
-      if (start) console.error('hangar: offering on peerlink failed:', error);
-      setTimeout(() => offerOnPeerlink(false), 5_000);
+      if (start) console.error(`hangar: offering ${params.kind} on peerlink failed:`, error);
+      retry();
     }
   };
-  void offerOnPeerlink(true);
+  const { webSocketAddress, ahpAddress } = store.state.host;
+  void keepOffered({ kind: 'hangar', name: 'hangar', address: webSocketAddress }, true);
+  void keepOffered({ kind: 'ahp', name: 'hangar (AHP)', address: ahpAddress }, true);
 }
 
 main().catch(async error => {
