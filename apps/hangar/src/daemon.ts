@@ -20,6 +20,7 @@ import type { OfferParams } from '@cmdless/peerlink-sdk';
 import type { AgentsState, HangarService, RegistryAgent, RestartParams } from '@cmdless/hangar-sdk';
 import { defaultAgents, resolveAgent, validEntry } from './agents.js';
 import { fetchRegistry } from './registry.js';
+import { codexTrustedProjects, trustedPath } from './trust.js';
 
 const dataPath = getAppDataPath('hangar');
 
@@ -98,6 +99,7 @@ async function main() {
       }),
       agents: file(path.join(dataPath, 'agents.json'), { default: defaultAgents }),
       registry: file(path.join(dataPath, 'acp-registry.json'), { default: { agents: {} } }),
+      trust: file(path.join(dataPath, 'trust.json'), { default: { folders: [] } }),
     },
     configure: server => {
       server.onRequest.restart(params => restart(params));
@@ -111,6 +113,22 @@ async function main() {
         await reconcile();
       });
       server.onRequest.refreshRegistry(() => refreshRegistry());
+      server.onRequest.trustFolder(async ({ path: folder }) => {
+        const trusted = trustedPath(folder);
+        await store.update('trust', trust => {
+          if (!trust.folders.includes(trusted)) trust.folders.push(trusted);
+        });
+      });
+      server.onRequest.untrustFolder(async ({ path: folder }) => {
+        const trusted = trustedPath(folder);
+        await store.update('trust', trust => { trust.folders = trust.folders.filter(each => each !== trusted); });
+      });
+      server.onRequest.importCodexTrust(async () => {
+        const projects = (await codexTrustedProjects()).map(trustedPath);
+        const added = projects.filter(each => !store.state.trust.folders.includes(each));
+        if (added.length > 0) await store.update('trust', trust => { trust.folders.push(...added); });
+        return { added };
+      });
     },
   });
   const { store, accept } = await createHangarHost();

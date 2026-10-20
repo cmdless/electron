@@ -77,6 +77,13 @@ export type RegistryState = {
   agents: Record<string, RegistryAgent>;
 };
 
+// trust.json: the folders agents may be started in, as absolute paths - a
+// folder's subfolders are trusted with it. ahpd asks every client for this
+// on its own connection, so each UI pushes the same list when it connects.
+export type TrustState = {
+  folders: string[];
+};
+
 export type RestartParams = {
   // restart even while a turn is running, ending it
   force?: boolean;
@@ -93,11 +100,17 @@ export const hangarProtocol = defineProtocol(({ side, request, state }) => ({
       setAgent: request<{ entry: AgentEntry }, void>('agents/set'),
       removeAgent: request<{ id: string }, void>('agents/remove'),
       refreshRegistry: request<void, void>('registry/refresh'),
+      trustFolder: request<{ path: string }, void>('trust/add'),
+      untrustFolder: request<{ path: string }, void>('trust/remove'),
+      // adds every project Codex's config.toml marks trusted, and says which
+      // were new
+      importCodexTrust: request<void, { added: string[] }>('trust/importCodex'),
     },
   }),
   state: {
     host: state<HostState>('host'),
     agents: state<AgentsState>('agents'),
     registry: state<RegistryState>('registry'),
+    trust: state<TrustState>('trust'),
   },
 }));
