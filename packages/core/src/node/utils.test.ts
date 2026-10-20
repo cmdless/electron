@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveService, waitForService } from './utils.js';
+import fs from 'node:fs';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
+import { getTmpSocketPath, listenExclusive, resolveService, waitForService } from './utils.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'service.fixture.ts');
 const run = (...args: string[]): [string, string[]] => [process.execPath, ['--import', 'tsx', fixture, ...args]];
@@ -32,4 +35,34 @@ test('waitForService rejects on timeout and kills the child', async () => {
 
 test('resolveService throws outside of waitForService', () => {
   assert.throws(() => resolveService(1), /was this process started by waitForService/);
+});
+
+test('listenExclusive lets only one server hold a socket', async () => {
+  const socketPath = getTmpSocketPath(`cmdless-test-${crypto.randomUUID()}`);
+  const first = net.createServer();
+  const second = net.createServer();
+  try {
+    assert.equal(await listenExclusive(first, socketPath), true);
+    assert.equal(await listenExclusive(second, socketPath), false);
+  } finally {
+    first.close();
+    second.close();
+  }
+});
+
+test('listenExclusive replaces a socket nothing listens on', { skip: process.platform === 'win32' }, async () => {
+  const socketPath = getTmpSocketPath(`cmdless-test-${crypto.randomUUID()}`);
+  // a process that listens and is then killed outright leaves its socket file behind
+  const holder = spawn(process.execPath, ['-e', `require('net').createServer().listen(${JSON.stringify(socketPath)}, () => console.log('up'))`]);
+  await new Promise(resolve => holder.stdout.once('data', resolve));
+  holder.kill('SIGKILL');
+  await new Promise(resolve => holder.once('exit', resolve));
+  assert.ok(fs.existsSync(socketPath));
+
+  const server = net.createServer();
+  try {
+    assert.equal(await listenExclusive(server, socketPath), true);
+  } finally {
+    server.close();
+  }
 });

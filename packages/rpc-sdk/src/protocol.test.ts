@@ -186,3 +186,20 @@ test('createServer takes the store directly, for when there is no host', async (
   // @ts-expect-error - a protocol with state channels needs a store
   protocol.createServer(serverConn);
 });
+
+test('onClose runs once when either side ends the connection', async () => {
+  const protocol = defineProtocol(({ side, request }) => ({
+    clientToServer: side({ requests: { ping: request('ping') } }),
+  }));
+  const { clientConn, serverConn } = createLoopbackPair();
+  const server = protocol.createServer(serverConn);
+  const client = protocol.createClient(clientConn);
+  server.listen();
+  client.listen();
+
+  let closed = 0;
+  server.onClose(() => closed++);
+  server.dispose();
+  server.dispose();
+  assert.equal(closed, 1);
+});

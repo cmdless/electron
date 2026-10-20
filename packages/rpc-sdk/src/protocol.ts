@@ -83,6 +83,8 @@ export type RpcPeer<Channel extends RpcChannel = RpcChannel> = {
   onNotification: NotificationHandlers<Channel['incoming']['notifications']>;
   listen: () => void;
   dispose: () => void;
+  // called once when the connection ends, whether it closed or was disposed
+  onClose: (listener: () => void) => Disposable;
 };
 function peer<Channel extends RpcChannel>(
   { outgoing, incoming }: Channel,
@@ -119,7 +121,18 @@ function peer<Channel extends RpcChannel>(
     onRequest,
     onNotification,
     listen: () => connection.listen(),
-    dispose: () => connection.dispose()
+    dispose: () => connection.dispose(),
+    onClose: (listener: () => void) => {
+      let ended = false;
+      const end = () => {
+        if (ended) return;
+        ended = true;
+        listener();
+      };
+      const closed = connection.onClose(end);
+      const disposed = connection.onDispose(end);
+      return { dispose: () => { closed.dispose(); disposed.dispose(); } };
+    },
   } as RpcPeer<Channel>;
 }
 

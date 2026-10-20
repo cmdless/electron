@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -161,4 +162,56 @@ export function rejectService(error: unknown) {
 // true when this process was started by waitForService and hasn't reported yet
 export function isPendingService() {
   return !!process.env[SERVICE_SOCKET_KEY];
+}
+
+function listenOn(server: net.Server, socketPath: string) {
+  return new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => { server.off('listening', onListening); reject(error); };
+    const onListening = () => { server.off('error', onError); resolve(); };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(socketPath);
+  });
+}
+
+// listens on a named socket only if nothing else is - the socket is the
+// lock, so a daemon that gets it is the only one. Resolves false when a live
+// process already holds it. A Unix socket outlives a crashed process as a
+// file nothing listens on, so a refused connection means it's stale and safe
+// to replace; a named pipe on Windows goes away with its process.
+export async function listenExclusive(server: net.Server, socketPath: string): Promise<boolean> {
+  try {
+    await listenOn(server, socketPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error;
+  }
+
+  const live = await new Promise<boolean>((resolve, reject) => {
+    const probe = net.createConnection(socketPath, () => { probe.end(); resolve(true); });
+    probe.once('error', error => {
+      if ((error as NodeJS.ErrnoException).code === 'ECONNREFUSED') resolve(false);
+      else reject(error);
+    });
+  });
+  if (live) return false;
+
+  fs.rmSync(socketPath, { force: true });
+  await listenOn(server, socketPath);
+  return true;
+}
+
+// what a daemon resolves as a service: only where to reach it
+export type DaemonService = { address: string };
+
+// connects to a running daemon, or starts it (from daemonPath) when nothing
+// answers and connects to the address it resolves as a service. connect
+// with no address tries the daemon's usual one.
+export async function connectOrStart<T>(connect: (address?: string) => Promise<T>, daemonPath: string): Promise<T> {
+  try {
+    return await connect();
+  } catch {
+    const { value } = await waitForService<DaemonService>(process.execPath, [daemonPath]);
+    return connect(value.address);
+  }
 }

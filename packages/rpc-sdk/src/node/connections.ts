@@ -13,7 +13,7 @@ import {
   PortMessageWriter,
 } from "vscode-jsonrpc/node";
 import type { ClientOf, ClientProtocol } from "../protocol.js";
-import type { TransportParameters } from "../shared.js";
+import type { Accept, TransportParameters } from "../shared.js";
 
 export const createStream = defineConnection(StreamMessageReader, StreamMessageWriter);
 
@@ -51,11 +51,17 @@ export function connectStdio<P extends ClientProtocol>(
   return protocol.createClient(connection) as ClientOf<P>;
 }
 
+// a net.Server that hands each socket to accept, not yet listening - for
+// when the caller decides how it listens (a single-instance lock, say)
+export function createSocketServer(accept: Accept): Server {
+  return createServer(socket => accept(createSocket(socket)).listen());
+}
+
 export async function startSocket(
   parameters: TransportParameters<ListenOptions>,
 ): Promise<Server> {
   const { accept, options } = parameters;
-  const server = createServer(socket => accept(createSocket(socket)).listen());
+  const server = createSocketServer(accept);
 
   return new Promise((resolve, reject) => {
     const onListening = () => {
