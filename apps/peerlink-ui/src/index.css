@@ -28,3 +28,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .device li { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
 .device li .kind { min-width: 80px; font-family: ui-monospace, monospace; font-size: 0.9em; }
 .device li button { margin-left: auto; }
+
+.device > .view { display: block; margin: 8px 0 0 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.view p { margin: 0 0 6px; }
+.view dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+.view dt { color: var(--muted); }
+.view dd { margin: 0; }
