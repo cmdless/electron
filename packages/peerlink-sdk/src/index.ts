@@ -1,6 +1,7 @@
 import { defineProtocol } from '@cmdless/rpc-sdk';
 
 export * from './dropbox.js';
+export * from './devices.js';
 
 // an offer as this device keeps it - its address never leaves the machine
 export type Offer = {

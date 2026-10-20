@@ -98,7 +98,7 @@ async function main() {
     getToken: async () => (await auth.request.getToken({ provider: dropboxApp, interactive: false })).accessToken,
     settings: () => store.state.settings,
     offers: () => store.state.offers,
-    setDevices: edit => { void store.update('devices', devices => { edit(devices); }); },
+    setDevices: devices => { void store.set({ devices }); },
     onStopped: reason => { void setAccount({ status: 'signed-out', error: reason }); },
     onError: reason => { void setAccount(reason ? { status: 'error', error: reason } : { status: 'syncing' }); },
   });
