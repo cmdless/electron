@@ -55,9 +55,11 @@ function Configured({ hangar }: { hangar: HangarClient }) {
   return (
     <Stack gap="xs">
       <Title order={4}>Agents</Title>
-      <Paper withBorder p="sm">
-        <Group justify="space-between"><Text>Claude</Text><Badge variant="light">built in</Badge></Group>
-      </Paper>
+      {['Claude', 'pi'].map(name => (
+        <Paper key={name} withBorder p="sm">
+          <Group justify="space-between"><Text>{name}</Text><Badge variant="light">built in</Badge></Group>
+        </Paper>
+      ))}
       {Object.values(agents ?? {}).map(entry => {
         const { name, detail } = describe(entry);
         const unavailable = host?.unavailable[entry.id];

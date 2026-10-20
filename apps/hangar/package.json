@@ -28,6 +28,7 @@
   "dependencies": {
     "@ahpd/agent-acp": "0.12.0",
     "@ahpd/agent-claude": "0.12.0",
+    "@ahpd/agent-pi": "0.12.0",
     "@ahpd/sdk": "0.12.0",
     "@cmdless/core": "*",
     "@cmdless/hangar-sdk": "*",

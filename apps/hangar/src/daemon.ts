@@ -9,6 +9,7 @@ import {
 import type { Host, Peer } from '@ahpd/sdk';
 import { claude } from '@ahpd/agent-claude';
 import { acpAgent } from '@ahpd/agent-acp';
+import { piAgent } from '@ahpd/agent-pi';
 import type { AcpOptions } from '@ahpd/agent-acp';
 import { getAppDataPath, isPendingService, listenExclusive, rejectService, resolveService } from '@cmdless/core/node';
 import { memory } from '@cmdless/rpc-sdk';
@@ -65,7 +66,8 @@ function createGeneration(resolved: ReturnType<typeof resolveAgents>): Generatio
   const { agents, unavailable, workspaces, signature } = resolved;
   const host = createHost({
     path: workspaces[0],
-    agents: [claude({ paths: workspaces }), ...agents.map(acpAgent)],
+    // Claude and pi are built in; pi runs in this process, from ~/.pi/agent
+    agents: [claude({ paths: workspaces }), piAgent({}, workspaces), ...agents.map(acpAgent)],
     sessions: fileSessions({ dir: path.join(dataPath, 'sessions') }),
     usage: fileUsage({ folder: path.join(dataPath, 'usage') }),
     worktreesRoot: path.join(dataPath, 'worktrees'),
