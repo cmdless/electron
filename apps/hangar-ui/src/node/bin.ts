@@ -1,0 +1,47 @@
+#!/usr/bin/env node
+
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createShowCommand, getCmdlessUrl } from '@cmdless/ui-sdk/node';
+import { ensureHangar } from '@cmdless/hangar-sdk/node';
+import { windowProtocol } from '../shared/protocols.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distIndex = path.join(__dirname, '../../dist/index.html');
+const daemonPath = fileURLToPath(import.meta.resolve('@cmdless/hangar/daemon'));
+
+// the window's own origins: the built file, or the dev server when one
+// published its URL. A web page can't forge the Origin of a WebSocket
+// handshake, so this keeps any page in a browser from asking this port for
+// hangar's address (and its token).
+const devUrl = getCmdlessUrl();
+const windowOrigins = new Set(['file://', 'null', ...(devUrl ? [new URL(devUrl).origin] : [])]);
+
+// hangar's WebSocket address carries its token, so it's handed to the window
+// over the window's own connection rather than put in its URL
+const showHangar = createShowCommand<{ url: string }, void>({
+  params: () => ({ type: 'file', source: `${distIndex}#/agents`, app: 'hangar', width: 1000, height: 720 }),
+  transport: async ({ url }) => {
+    const { accept } = await windowProtocol.defineHost({
+      configure: server => server.onRequest.hangar(() => ({ url })),
+    })();
+    return {
+      accept,
+      options: {
+        port: 0,
+        host: '127.0.0.1',
+        verifyClient: ({ origin }: { origin?: string }) => windowOrigins.has(origin ?? ''),
+      },
+    };
+  },
+  result: () => undefined,
+});
+
+// starts the daemon if it isn't running, and asks it where its WebSocket is
+const hangar = await ensureHangar(daemonPath);
+let url = '';
+const stop = await hangar.state.host.subscribe(host => url = host.webSocketAddress);
+stop();
+hangar.dispose();
+
+await showHangar({ url });

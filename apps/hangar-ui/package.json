@@ -1,0 +1,41 @@
+{
+  "name": "@cmdless/hangar-ui",
+  "description": "Hangar UI: Manage hangar's agents, and drive its AHP host.",
+  "version": "0.0.1",
+  "license": "MIT",
+  "type": "module",
+  "author": {
+    "name": "Fluttershy",
+    "url": "https://github.com/Fluttershy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cmdless/electron.git"
+  },
+  "bin": {
+    "hangar-ui": "./out/node/bin.js"
+  },
+  "scripts": {
+    "dev": "vite",
+    "prebuild": "rimraf out dist node_modules/.tmp",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@cmdless/hangar": "*",
+    "@cmdless/hangar-sdk": "*",
+    "@cmdless/rpc-sdk": "*",
+    "@cmdless/ui-sdk": "*",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "vite": "^8.3.0"
+  }
+}
