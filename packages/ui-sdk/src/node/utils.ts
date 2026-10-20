@@ -385,6 +385,7 @@ export class CmdlessUI {
           ...opt('width', parameters.width),
           ...opt('height', parameters.height),
           ...opt('address', parameters.address),
+          ...opt('redirect', parameters.redirect),
           ...opt('parent', parameters.parent)
         ];
       case 'message-box':

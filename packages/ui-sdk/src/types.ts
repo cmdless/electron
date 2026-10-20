@@ -18,6 +18,11 @@ export const ShowOptionsSchema = SetupParamsSchema.extend({
   width: z.number().optional(),
   height: z.number().optional(),
   address: z.string().optional(),
+  // a URL prefix: when the window is about to navigate to a URL starting
+  // with it, the navigation is cancelled, the window closes, and it resolves
+  // to that URL - for an OAuth redirect, say. Such a window shows a third
+  // party's pages, so it gets no preload (no window.cmdless).
+  redirect: z.string().optional(),
 });
 export type ShowOptions = z.infer<typeof ShowOptionsSchema>;
 

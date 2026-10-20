@@ -82,8 +82,24 @@ app.on('before-quit', () => {
     disposeWindowMcpHandles(windowId);
 });
 
+// Electron's user agent with its own tokens (Electron/x, the app's
+// name/version) taken out, leaving what Chrome sends - some sign-in pages,
+// Google's among them, refuse a browser they see is embedded in an app
+function browserUserAgent() {
+  return app.userAgentFallback.replace(/ (?!Mozilla|AppleWebKit|Chrome|Safari)[\w.-]+\/[\w.-]+/g, '');
+}
+
 async function createWindow(parameters: types.ShowParams, finish = resolve, parent?: BrowserWindow) {
-  const { app, address, type, source, width, height } = parameters;
+  const { app, address, type, source, width, height, redirect } = parameters;
+
+  // a window can end more than one way (resolved, captured, closed) - only
+  // the first counts
+  let finished = false;
+  const finishOnce: typeof finish = (value, exitCode) => {
+    if (finished) return;
+    finished = true;
+    finish(value, exitCode);
+  };
 
   const win = new BrowserWindow({
     parent,
@@ -93,7 +109,9 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
     autoHideMenuBar: true,
     title: app,
     webPreferences: {
-      preload: preloadPath,
+      // a redirect window shows a third party's pages (a sign-in, say), so
+      // it gets no window.cmdless
+      preload: redirect ? undefined : preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
@@ -116,7 +134,7 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
     }));
 
   const ipc = cmdlessIPC.createServer(createElectronIPC(asElectronIPC(win.webContents.ipc, win.webContents)));
-  ipc.onNotification.resolve(({ value, exitCode }) => finish(value, exitCode));
+  ipc.onNotification.resolve(({ value, exitCode }) => finishOnce(value, exitCode));
   ipc.onRequest.ui(parameters => ui.run(parameters));
   ipc.onRequest.connectionInfo(() => ({ address, windowId: win.id }));
   ipc.onRequest.mcpAddress(({ packageName, version }) =>
@@ -124,18 +142,57 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
   ipc.listen();
 
   // ensure window always resolves
-  win.on('closed', () => { finish(null); disposeWindowMcpHandles(win.id); });
+  win.on('closed', () => { finishOnce(null); disposeWindowMcpHandles(win.id); });
+
+  // navigating to the redirect prefix ends the window with that URL, before
+  // it's ever requested - a provider's HTTP redirect is will-redirect, a
+  // page's own navigation is will-navigate
+  if (redirect) {
+    const capture = (event: Electron.Event, url: string) => {
+      if (!url.startsWith(redirect)) return;
+      event.preventDefault();
+      if (finished) return;
+      // resolving can end the whole app (and the window with it), so the
+      // window is only closed if it's still there afterwards
+      finishOnce(url);
+      if (!win.isDestroyed()) win.close();
+    };
+    win.webContents.on('will-redirect', capture);
+    win.webContents.on('will-navigate', capture);
+  }
   win.on('ready-to-show', () => win.show());
 
-  win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url);
-    return { action: 'deny' };
-  });
+  if (redirect) {
+    // a sign-in's popups (say, "continue with Google") report back to the
+    // page that opened them, so they open here as child windows rather
+    // than in the default browser - with no preload either
+    const userAgent = browserUserAgent();
+    win.webContents.setUserAgent(userAgent);
+    win.webContents.setWindowOpenHandler(() => ({
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        parent: win,
+        autoHideMenuBar: true,
+        webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+      },
+    }));
+    win.webContents.on('did-create-window', child => child.webContents.setUserAgent(userAgent));
+  } else {
+    win.webContents.setWindowOpenHandler((details) => {
+      shell.openExternal(details.url);
+      return { action: 'deny' };
+    });
+  }
 
   // HMR for renderer base on electron-vite cli.
   // Load the remote URL for development or the local html file for production.
-  if (type === 'url') await win.loadURL(source);
-  else await win.loadFile(source);
+  // a capture during the very first load aborts it, which isn't a failure
+  try {
+    if (type === 'url') await win.loadURL(source);
+    else await win.loadFile(source);
+  } catch (error) {
+    if (!finished) throw error;
+  }
 
   return win;
 }
@@ -225,6 +282,7 @@ function cli() {
     .option('--width <number>', 'Width of the window', Number)
     .option('--height <number>', 'Height of the window', Number)
     .option('--address <address>', 'Backend address')
+    .option('--redirect <prefix>', 'End the window when it navigates to a URL starting with this, resolving to that URL')
     .action((type, source, options: types.ShowOptions) => run({ kind: 'show', type, source, ...options }));
 
   program
