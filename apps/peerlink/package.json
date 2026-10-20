@@ -26,6 +26,11 @@
     "test": "node ../../scripts/run-tests.mjs"
   },
   "dependencies": {
-    "@cmdless/peerlink-sdk": "*"
+    "@cmdless/core": "*",
+    "@cmdless/peerlink-sdk": "*",
+    "@cmdless/rpc-sdk": "*"
+  },
+  "exports": {
+    "./daemon": "./dist/daemon.js"
   }
 }
