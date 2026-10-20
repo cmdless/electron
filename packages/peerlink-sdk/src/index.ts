@@ -2,6 +2,8 @@ import { defineProtocol } from '@cmdless/rpc-sdk';
 
 export * from './dropbox.js';
 export * from './devices.js';
+export * from './pipes.js';
+export * from './signaling.js';
 
 // an offer as this device keeps it - its address never leaves the machine
 export type Offer = {
@@ -42,6 +44,8 @@ export type Advertisement = {
   // false once the daemon shut down cleanly
   online: boolean;
   offers: Record<string, AdvertisedOffer>;
+  // the STUN/TURN servers to reach this device with
+  iceServers: IceServer[];
 };
 
 export const DEVICES_FOLDER = '/devices';
@@ -58,6 +62,7 @@ export type Device = {
   updatedAt: string;
   online: boolean;
   offers: Record<string, AdvertisedOffer>;
+  iceServers: IceServer[];
 };
 
 export type AccountState = {

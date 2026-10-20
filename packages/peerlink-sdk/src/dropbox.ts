@@ -71,6 +71,10 @@ export function createDropbox(getToken: (retry: boolean) => Promise<string>) {
       }));
     },
 
+    async remove(path: string) {
+      await rpc('files/delete_v2', { path });
+    },
+
     async download(path: string) {
       const response = await call('https://content.dropboxapi.com/2/files/download', token => ({
         method: 'POST',

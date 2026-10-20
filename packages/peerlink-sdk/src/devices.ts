@@ -21,6 +21,7 @@ const toDevice = (advertisement: Advertisement): Device => ({
   updatedAt: advertisement.updatedAt,
   online: isOnline(advertisement),
   offers: advertisement.offers,
+  iceServers: advertisement.iceServers ?? [],
 });
 
 // keeps up with every device's advertisement under /devices: lists them
