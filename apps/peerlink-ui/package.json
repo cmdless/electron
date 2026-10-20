@@ -21,6 +21,8 @@
     "prebuild": "rimraf dist node_modules/.tmp"
   },
   "dependencies": {
+    "@cmdless/auth-sdk": "*",
+    "@cmdless/peerlink-sdk": "*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
