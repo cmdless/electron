@@ -1,5 +1,6 @@
 import { advertisementPath, createDropbox, DropboxError, watchDevices } from '@cmdless/peerlink-sdk';
-import type { Advertisement, Device, Offer, SettingsState } from '@cmdless/peerlink-sdk';
+import type { Advertisement, Device, LinkTarget, Offer, SettingsState } from '@cmdless/peerlink-sdk';
+import { answerLinks } from './links.js';
 
 export const DEFAULT_HEARTBEAT_SECONDS = 60;
 
@@ -11,6 +12,8 @@ type SyncOptions = {
   // a failure the sync can't get past by itself (no token, a refused one)
   onStopped: (reason: string) => void;
   onError: (reason: string | undefined) => void;
+  // the local address a connecting device's channel opens, if it may
+  resolveTarget: (target: LinkTarget) => string | undefined;
 };
 
 const heartbeatOf = (settings: SettingsState) => settings.heartbeatSeconds ?? DEFAULT_HEARTBEAT_SECONDS;
@@ -20,6 +23,7 @@ const heartbeatOf = (settings: SettingsState) => settings.heartbeatSeconds ?? DE
 export function createSync(options: SyncOptions) {
   const dropbox = createDropbox(options.getToken);
   let watcher: ReturnType<typeof watchDevices> | undefined;
+  let links: ReturnType<typeof answerLinks> | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
   let publishing: Promise<void> = Promise.resolve();
 
@@ -33,6 +37,7 @@ export function createSync(options: SyncOptions) {
       heartbeatSeconds: heartbeatOf(settings),
       online,
       offers: Object.fromEntries(Object.values(options.offers()).map(({ id, kind, name }) => [id, { id, kind, name }])),
+      iceServers: settings.iceServers,
     };
   };
 
@@ -54,6 +59,8 @@ export function createSync(options: SyncOptions) {
   function stop(markOffline: boolean) {
     if (!watcher) return Promise.resolve();
     watcher.stop();
+    links?.stop();
+    links = undefined;
     watcher = undefined;
     clearInterval(heartbeat);
     options.setDevices({});
@@ -77,6 +84,13 @@ export function createSync(options: SyncOptions) {
       heartbeat = setInterval(() => publish().catch(failed), heartbeatOf(options.settings()) * 1000);
       // written first, so the other devices (and the watch) see this one right away
       publish().catch(failed);
+      links = answerLinks({
+        dropbox,
+        deviceId: options.settings().deviceId,
+        iceServers: () => options.settings().iceServers,
+        resolveTarget: options.resolveTarget,
+        onError: failed,
+      });
       watcher = watchDevices(dropbox, {
         ownDeviceId: options.settings().deviceId,
         onChange: options.setDevices,

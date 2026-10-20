@@ -101,6 +101,13 @@ async function main() {
     setDevices: devices => { void store.set({ devices }); },
     onStopped: reason => { void setAccount({ status: 'signed-out', error: reason }); },
     onError: reason => { void setAccount(reason ? { status: 'error', error: reason } : { status: 'syncing' }); },
+    // a device that connects may open one of this device's offers, or an
+    // address one of them has - nothing else
+    resolveTarget: target => {
+      const offers = Object.values(store.state.offers);
+      if ('offerId' in target) return store.state.offers[target.offerId]?.address;
+      return offers.some(offer => offer.address === target.address) ? target.address : undefined;
+    },
   });
   const startSync = () => {
     if (sync.running) return;

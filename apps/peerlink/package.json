@@ -30,7 +30,9 @@
     "@cmdless/auth-sdk": "*",
     "@cmdless/core": "*",
     "@cmdless/peerlink-sdk": "*",
-    "@cmdless/rpc-sdk": "*"
+    "@cmdless/rpc-sdk": "*",
+    "werift": "0.25.1",
+    "ws": "8.21.3"
   },
   "exports": {
     "./daemon": "./dist/daemon.js"
