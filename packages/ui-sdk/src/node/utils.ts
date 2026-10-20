@@ -1,12 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { findPackageJSON } from "node:module";
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import type { SpawnOptions } from 'node:child_process';
 import * as types from '../types.js';
 import { defineProtocol } from '@cmdless/rpc-sdk';
 import type { MaybePromise, TransportParameters } from '@cmdless/rpc-sdk';
-import type { ServerOptions } from 'ws';
+import type { ServerOptions, VerifyClientCallbackAsync, VerifyClientCallbackSync } from 'ws';
 import { startWebSocket, closeWebSocketServer, getWebSocketUrl } from '@cmdless/rpc-sdk/ws/node';
 import { startSocket, connectSocket } from '@cmdless/rpc-sdk/node';
 import { getCmdlessRoot, getTmpSocketPath, setCmdlessRoot } from '@cmdless/core/node';
@@ -399,6 +400,20 @@ export class CmdlessUI {
   }
 }
 
+// wraps a transport's WebSocket so it only admits connections presenting
+// ?token=<token>, ahead of any verifyClient the transport set itself
+function requireToken(parameters: TransportParameters<ServerOptions>, token: string): TransportParameters<ServerOptions> {
+  const presents = (url = '') => {
+    const presented = new URL(url, 'ws://window').searchParams.get('token') ?? '';
+    return presented.length === token.length && timingSafeEqual(Buffer.from(presented), Buffer.from(token));
+  };
+  const own = parameters.options?.verifyClient;
+  const verifyClient: VerifyClientCallbackSync | VerifyClientCallbackAsync = own && own.length >= 2
+    ? (info, done) => presents(info.req.url) ? (own as VerifyClientCallbackAsync)(info, done) : done(false, 401)
+    : (info: Parameters<VerifyClientCallbackSync>[0]) => presents(info.req.url) && (own ? (own as VerifyClientCallbackSync)(info) : true);
+  return { ...parameters, options: { ...parameters.options, verifyClient } };
+}
+
 export function createShowCommand<In = void, Out = string>(config: {
   params: (input: In) => Omit<types.ShowParams, 'kind' | 'address' | 'parent'>;
   result?: (input: In, stdout: string) => Out;
@@ -436,12 +451,14 @@ export function createShowCommand<In = void, Out = string>(config: {
       parameters.source = url + hash;
     }
 
-    const server = transport ? await startWebSocket(await transport(input, parameters)) : undefined;
+    // anything on this machine can reach a loopback port, a web page in a
+    // browser included - so the window's connection requires a token, handed
+    // to it inside the address it's given
+    const token = randomBytes(24).toString('base64url');
+    const server = transport ? await startWebSocket(requireToken(await transport(input, parameters), token)) : undefined;
     try {
-      if (server) {
-        const address = getWebSocketUrl(server);
-        parameters.address = address;
-      }
+      if (server)
+        parameters.address = `${getWebSocketUrl(server)}/?token=${token}`;
 
       const stdout = await new CmdlessUI(dispatcher, cmdlessRoot).show(parameters);
       return result(input, stdout);

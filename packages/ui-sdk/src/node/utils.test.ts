@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { defineProtocol } from '@cmdless/rpc-sdk';
+import { connectWebSocket } from '@cmdless/rpc-sdk/ws';
 import { CmdlessUI, createShowCommand, getCmdlessUrl, getPackageName, setCmdlessUrl } from './utils.js';
 import type * as types from '../types.js';
 
@@ -101,4 +103,42 @@ test('createShowCommand: a dev CMDLESS_URL override with no hash in the original
   }
 
   assert.equal(seen?.source, 'http://localhost:5173/');
+});
+
+test('createShowCommand: the window connection only admits the token in its address', async () => {
+  const protocol = defineProtocol(({ side, request }) => ({
+    clientToServer: side({ requests: { get: request<void, string>('get') } }),
+  }));
+
+  const tryOpen = (url: string) => new Promise<string>(resolve => {
+    const socket = new WebSocket(url);
+    socket.onopen = () => { socket.close(); resolve('open'); };
+    socket.onerror = () => resolve('refused');
+  });
+
+  const results: Record<string, string> = {};
+  const show = createShowCommand<void, void>({
+    params: () => ({ type: 'file', source: '/dist/index.html' }),
+    transport: async () => {
+      const { accept } = await protocol.defineHost({ configure: server => server.onRequest.get(() => 'hello') })();
+      return { accept, options: { port: 0, host: '127.0.0.1' } };
+    },
+    // stands in for the window: tries the address without its token, with a
+    // wrong one, and as given
+    dispatcher: async parameters => {
+      const address = (parameters as types.ShowParams).address!;
+      const bare = address.replace(/\?.*$/, '');
+      results.missing = await tryOpen(bare);
+      results.wrong = await tryOpen(`${bare}?token=nope`);
+      const client = await connectWebSocket(protocol, { url: address });
+      client.listen();
+      results.given = await client.request.get();
+      client.dispose();
+      return '';
+    },
+    result: () => undefined,
+  });
+
+  await show();
+  assert.deepEqual(results, { missing: 'refused', wrong: 'refused', given: 'hello' });
 });
