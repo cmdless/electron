@@ -85,7 +85,26 @@ export function useAhp() {
     };
   }, [address, instance]);
 
+  // hangar's trusted folders, said to ahpd again on every connection and
+  // whenever they change - ahpd keeps a client's trust for its connection only
+  const trust = useChannel(hangar.state.trust);
+  const client = ahp?.client;
+  const clientId = ahp?.clientId;
+  useEffect(() => {
+    if (client && clientId && trust) pushTrust({ client, clientId }, trust.folders);
+  }, [client, clientId, trust]);
+
   return { ahp, error };
+}
+
+export const fileUri = (folder: string) => `file://${folder.split('/').map(encodeURIComponent).join('/')}`;
+
+// the folders ahpd may start an agent in for sessions this connection creates
+export function pushTrust(ahp: Pick<Ahp, 'client' | 'clientId'>, folders: string[]) {
+  ahp.client.dispatch(ROOT, {
+    type: 'root/configChanged',
+    config: { workspaceTrust: { enabled: true, trustedUris: folders.map(fileUri) } },
+  } as unknown as StateAction);
 }
 
 // one channel's state from its snapshot, folded forward through its actions
@@ -132,7 +151,7 @@ export async function createSession(ahp: Ahp, provider: string, folder?: string)
   await ahp.client.request('createSession', {
     channel,
     provider,
-    ...(folder ? { workingDirectories: [`file://${folder}`] } : {}),
+    ...(folder ? { workingDirectories: [fileUri(folder)] } : {}),
     activeClient: { clientId: ahp.clientId, displayName: 'Hangar UI', tools: [] },
   });
   return channel;

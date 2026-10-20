@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  ActionIcon, Badge, Box, Button, Center, Group, Loader, NavLink, Paper, Popover, ScrollArea, Select, Spoiler, Stack, Text,
+  ActionIcon, Anchor, Badge, Box, Button, Center, Group, Loader, NavLink, Paper, Popover, ScrollArea, Select, Spoiler, Stack, Text,
   Textarea, TextInput,
 } from '@mantine/core';
 import { IconArrowUp, IconPlayerStopFilled, IconPlus, IconSearch } from '@tabler/icons-react';
@@ -9,7 +9,9 @@ import type {
   ActiveTurn, AgentInfo, ChatState, ConfigPropertySchema, ModelSelection, ResponsePart, SessionState, Turn, URI,
 } from '@microsoft/agent-host-protocol';
 import { ScreenLayout } from '../layout';
-import { cancelTurn, createSession, sendMessage, setSessionConfig, useAhp, useChat, useSession } from '../ahp';
+import { cancelTurn, createSession, pushTrust, sendMessage, setSessionConfig, useAhp, useChat, useSession } from '../ahp';
+import { useHangarClient } from '../hangar';
+import { useChannel } from '../useHangar';
 import type { Ahp } from '../ahp';
 
 const AGENT_KEY = 'hangar-ui:agent';
@@ -202,34 +204,63 @@ function Conversation({ ahp, agent, session, sessionUri, uri }: { ahp: Ahp; agen
   );
 }
 
-// starts a session in a folder, the last one used with this agent by default
+// whether hangar trusts a folder: it, or a folder it's inside, is on the list
+const isTrusted = (folders: string[], folder: string) =>
+  folders.some(each => folder === each || folder.startsWith(each.endsWith('/') ? each : `${each}/`));
+
+// starts a session in a folder, the last one used with this agent by default.
+// A folder hangar doesn't trust yet is trusted first, on the person's say-so,
+// since ahpd won't start an agent anywhere nobody vouched for.
 function NewSession({ ahp, provider, onCreated }: { ahp: Ahp; provider: string; onCreated: (uri: URI) => void }) {
+  const hangar = useHangarClient();
+  const trust = useChannel(hangar.state.trust);
   const [opened, setOpened] = useState(false);
   const [folder, setFolder] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [imported, setImported] = useState<string>();
 
-  const create = () => {
+  const where = folder.trim().replace(/(.)\/+$/, '$1');
+  const invalid = where !== '' && !where.startsWith('/');
+  const untrusted = where !== '' && !invalid && !!trust && !isTrusted(trust.folders, where);
+
+  const run = (action: () => Promise<void>) => {
     setBusy(true);
     setError(undefined);
-    const where = folder.trim();
-    createSession(ahp, provider, where || undefined)
-      .then(uri => {
-        if (where) localStorage.setItem(folderKey(provider), where);
-        else localStorage.removeItem(folderKey(provider));
-        setOpened(false);
-        onCreated(uri);
-      })
-      .catch(reason => setError(String(reason?.message ?? reason)))
-      .finally(() => setBusy(false));
+    action().catch(reason => setError(String(reason?.message ?? reason))).finally(() => setBusy(false));
   };
 
+  const create = () => run(async () => {
+    if (invalid) throw new Error('The folder needs to be an absolute path.');
+    if (untrusted) {
+      await hangar.request.trustFolder({ path: where });
+      // said to ahpd now rather than when hangar's list comes back around, so
+      // the session below is created with it
+      pushTrust(ahp, [...trust!.folders, where]);
+    }
+    const uri = await createSession(ahp, provider, where || undefined);
+    if (where) localStorage.setItem(folderKey(provider), where);
+    else localStorage.removeItem(folderKey(provider));
+    setOpened(false);
+    onCreated(uri);
+  });
+
+  const importCodex = () => run(async () => {
+    const { added } = await hangar.request.importCodexTrust();
+    setImported(added.length === 0 ? 'Nothing new to import.' : `Imported ${added.length} folder${added.length === 1 ? '' : 's'}.`);
+  });
+
   return (
-    <Popover opened={opened} onChange={setOpened} position="bottom-start" width={320} trapFocus>
+    <Popover opened={opened} onChange={setOpened} position="bottom-start" width={340} trapFocus>
       <Popover.Target>
         <Button
           size="xs" variant="light" leftSection={<IconPlus size={14} />} fullWidth
-          onClick={() => { setFolder(localStorage.getItem(folderKey(provider)) ?? ''); setError(undefined); setOpened(value => !value); }}
+          onClick={() => {
+            setFolder(localStorage.getItem(folderKey(provider)) ?? '');
+            setError(undefined);
+            setImported(undefined);
+            setOpened(value => !value);
+          }}
         >
           New session
         </Button>
@@ -240,9 +271,21 @@ function NewSession({ ahp, provider, onCreated }: { ahp: Ahp; provider: string; 
             size="xs" label="Folder" placeholder="The agent's default" data-autofocus
             value={folder} onChange={event => setFolder(event.currentTarget.value)}
             onKeyDown={event => { if (event.key === 'Enter') create(); }}
+            error={invalid ? 'Use an absolute path' : undefined}
           />
+          {untrusted && (
+            <Text size="xs" c="dimmed">
+              Hangar doesn't trust this folder yet. Trusting it lets agents load its project settings, hooks and MCP servers.
+            </Text>
+          )}
           {error && <Text c="red" size="xs">{error}</Text>}
-          <Button size="xs" loading={busy} onClick={create}>Create</Button>
+          <Button size="xs" loading={busy} disabled={invalid} onClick={create}>
+            {untrusted ? 'Trust folder and create' : 'Create'}
+          </Button>
+          <Group justify="space-between">
+            <Anchor component="button" size="xs" c="dimmed" disabled={busy} onClick={importCodex}>Import Codex's trusted folders</Anchor>
+            {imported && <Text size="xs" c="dimmed">{imported}</Text>}
+          </Group>
         </Stack>
       </Popover.Dropdown>
     </Popover>
