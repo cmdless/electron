@@ -1,6 +1,12 @@
 import { useState } from 'react';
+import {
+  Alert, Avatar, Badge, Button, Card, Group, Paper, SimpleGrid, Stack, Text, Title,
+} from '@mantine/core';
+import { IconRefresh } from '@tabler/icons-react';
 import type { AgentEntry, RegistryAgent } from '@cmdless/hangar-sdk';
-import { useChannel, useHangar } from '../useHangar';
+import { ScreenLayout } from '../layout';
+import { useHangarClient } from '../hangar';
+import { useChannel } from '../useHangar';
 import type { HangarClient } from '../useHangar';
 
 // what a registry agent can run as - hangar runs npx and uvx, not binaries yet
@@ -21,26 +27,18 @@ function useAction() {
   return { run, busy, error };
 }
 
-function Host({ hangar }: { hangar: HangarClient }) {
+function StaleBanner({ hangar }: { hangar: HangarClient }) {
   const host = useChannel(hangar.state.host);
   const { run, busy, error } = useAction();
-  if (!host) return null;
-
+  if (!host?.stale) return null;
   return (
-    <header className="host">
-      <div>
-        <strong>hangar</strong> <span className={`status ${host.status}`}>{host.status}</span>
-        <span className="muted"> · {host.dataPath}</span>
-      </div>
-      {host.stale && (
-        <div className="banner">
-          Agents changed since the host started.
-          <button disabled={busy} onClick={() => run(() => hangar.request.restart({}))}>Restart to apply</button>
-          {error && <button disabled={busy} onClick={() => run(() => hangar.request.restart({ force: true }))}>Restart anyway</button>}
-        </div>
-      )}
-      {error && <p className="error">{error}</p>}
-    </header>
+    <Alert color="violet" title="Agents changed since the host started">
+      <Group>
+        <Button size="xs" loading={busy} onClick={() => run(() => hangar.request.restart({}))}>Restart to apply</Button>
+        {error && <Button size="xs" variant="default" disabled={busy} onClick={() => run(() => hangar.request.restart({ force: true }))}>Restart anyway</Button>}
+      </Group>
+      {error && <Text c="red" size="sm" mt="xs">{error}</Text>}
+    </Alert>
   );
 }
 
@@ -51,26 +49,33 @@ function Configured({ hangar }: { hangar: HangarClient }) {
   const { run, busy, error } = useAction();
 
   const describe = (entry: AgentEntry) => entry.kind === 'custom'
-    ? `${entry.name} · ${entry.command} ${(entry.args ?? []).join(' ')}`
-    : `${registry?.agents[entry.registryId]?.name ?? entry.registryId} · ${entry.registryId}@${entry.version}`;
+    ? { name: entry.name, detail: `${entry.command} ${(entry.args ?? []).join(' ')}` }
+    : { name: registry?.agents[entry.registryId]?.name ?? entry.registryId, detail: `${entry.registryId}@${entry.version}` };
 
   return (
-    <section>
-      <h2>Agents</h2>
-      <ul className="list">
-        <li><span>Claude <span className="muted">· built in</span></span></li>
-        {Object.values(agents ?? {}).map(entry => (
-          <li key={entry.id}>
-            <span>
-              {describe(entry)}
-              {host?.unavailable[entry.id] && <span className="error"> · {host.unavailable[entry.id]}</span>}
-            </span>
-            <button disabled={busy} onClick={() => run(() => hangar.request.removeAgent({ id: entry.id }))}>Remove</button>
-          </li>
-        ))}
-      </ul>
-      {error && <p className="error">{error}</p>}
-    </section>
+    <Stack gap="xs">
+      <Title order={4}>Agents</Title>
+      <Paper withBorder p="sm">
+        <Group justify="space-between"><Text>Claude</Text><Badge variant="light">built in</Badge></Group>
+      </Paper>
+      {Object.values(agents ?? {}).map(entry => {
+        const { name, detail } = describe(entry);
+        const unavailable = host?.unavailable[entry.id];
+        return (
+          <Paper key={entry.id} withBorder p="sm">
+            <Group justify="space-between" wrap="nowrap">
+              <div>
+                <Text>{name}</Text>
+                <Text size="xs" c="dimmed">{detail}</Text>
+                {unavailable && <Text size="xs" c="red">{unavailable}</Text>}
+              </div>
+              <Button size="xs" variant="default" disabled={busy} onClick={() => run(() => hangar.request.removeAgent({ id: entry.id }))}>Remove</Button>
+            </Group>
+          </Paper>
+        );
+      })}
+      {error && <Text c="red" size="sm">{error}</Text>}
+    </Stack>
   );
 }
 
@@ -84,58 +89,62 @@ function Registry({ hangar }: { hangar: HangarClient }) {
   const status = host?.registry;
 
   return (
-    <section>
-      <h2>
-        ACP registry
-        <button disabled={busy || status?.status === 'refreshing'} onClick={() => run(() => hangar.request.refreshRegistry())}>
-          {status?.status === 'refreshing' ? 'Refreshing…' : 'Refresh'}
-        </button>
-      </h2>
-      <p className="muted">
+    <Stack gap="xs">
+      <Group justify="space-between">
+        <Title order={4}>ACP registry</Title>
+        <Button
+          size="xs" variant="default" leftSection={<IconRefresh size={14} />}
+          loading={status?.status === 'refreshing'} disabled={busy}
+          onClick={() => run(() => hangar.request.refreshRegistry())}
+        >
+          Refresh
+        </Button>
+      </Group>
+      <Text size="sm" c="dimmed">
         {registry?.fetchedAt ? `Fetched ${new Date(registry.fetchedAt).toLocaleString()}` : 'Not fetched yet'}
-        {status?.status === 'error' && <span className="error"> · {status.error}</span>}
-      </p>
-      <div className="cards">
+      </Text>
+      {status?.status === 'error' && <Text c="red" size="sm">{status.error}</Text>}
+      <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }}>
         {Object.values(registry?.agents ?? {}).sort((a, b) => a.name.localeCompare(b.name)).map(agent => {
           const via = runsAs(agent);
           return (
-            <article key={agent.id} className="card">
-              <header>
-                {agent.icon && <img src={agent.icon} alt="" />}
-                <strong>{agent.name}</strong>
-                <span className="muted">{agent.version}</span>
-              </header>
-              <p>{agent.description}</p>
-              <footer>
-                <span className="muted">{via ?? 'binary only'}</span>
-                <button
+            <Card key={agent.id} withBorder padding="sm">
+              <Group gap="xs" wrap="nowrap">
+                <Avatar src={agent.icon} size="sm" radius="sm">{agent.name[0]}</Avatar>
+                <Text fw={500} truncate>{agent.name}</Text>
+                <Text size="xs" c="dimmed" ml="auto">{agent.version}</Text>
+              </Group>
+              <Text size="sm" mt="xs" lineClamp={3} style={{ flex: 1 }}>{agent.description}</Text>
+              <Group justify="space-between" mt="sm">
+                <Badge variant="light" color={via ? 'gray' : 'orange'}>{via ?? 'binary only'}</Badge>
+                <Button
+                  size="xs"
                   disabled={busy || added.has(agent.id) || !via}
                   onClick={() => run(() => hangar.request.setAgent({
                     entry: { kind: 'acp-registry', id: agent.id, registryId: agent.id, version: 'latest' },
                   }))}
                 >
                   {added.has(agent.id) ? 'Added' : 'Add'}
-                </button>
-              </footer>
-            </article>
+                </Button>
+              </Group>
+            </Card>
           );
         })}
-      </div>
-      {error && <p className="error">{error}</p>}
-    </section>
+      </SimpleGrid>
+      {error && <Text c="red" size="sm">{error}</Text>}
+    </Stack>
   );
 }
 
 export default function Agents() {
-  const { client, error } = useHangar();
-  if (error) return <p className="error">{error}</p>;
-  if (!client) return <p className="muted">Connecting to hangar…</p>;
-
+  const hangar = useHangarClient();
   return (
-    <main>
-      <Host hangar={client} />
-      <Configured hangar={client} />
-      <Registry hangar={client} />
-    </main>
+    <ScreenLayout title="Agents">
+      <Stack gap="lg" maw={1100}>
+        <StaleBanner hangar={hangar} />
+        <Configured hangar={hangar} />
+        <Registry hangar={hangar} />
+      </Stack>
+    </ScreenLayout>
   );
 }

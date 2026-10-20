@@ -1,15 +1,19 @@
-import { useHashRoute } from './router';
-import Agents from './routes/Agents';
+import { useHashRoute } from './router'
+import Agents from './routes/Agents'
+import Chat from './routes/Chat'
+import Placeholder from './routes/Placeholder'
 
-const routes: Record<string, () => React.JSX.Element> = {
-  '/': Agents,
+const screens: Record<string, () => React.JSX.Element> = {
   '/agents': Agents,
-};
-
-function App() {
-  const route = useHashRoute();
-  const Route = routes[route];
-  return Route ? <Route /> : <p>Unknown route: {route}</p>;
+  '/providers': () => <Placeholder title="Providers" text="pi's model providers will be managed here." />,
+  '/mcp': () => <Placeholder title="MCP" text="MCP servers will be managed here." />,
+  '/chat': Chat,
 }
 
-export default App;
+function App() {
+  const route = useHashRoute()
+  const Screen = screens[route] ?? Agents
+  return <Screen />
+}
+
+export default App

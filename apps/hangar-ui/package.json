@@ -27,8 +27,13 @@
     "@cmdless/hangar-sdk": "*",
     "@cmdless/rpc-sdk": "*",
     "@cmdless/ui-sdk": "*",
+    "@mantine/core": "9.7.3",
+    "@mantine/hooks": "9.7.3",
+    "@microsoft/agent-host-protocol": "1.0.0",
+    "@tabler/icons-react": "3.49.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "react-markdown": "10.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
