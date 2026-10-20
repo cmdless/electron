@@ -32,5 +32,8 @@
     "@cmdless/core": "*",
     "@cmdless/hangar-sdk": "*",
     "@cmdless/rpc-sdk": "*"
+  },
+  "exports": {
+    "./daemon": "./dist/daemon.js"
   }
 }

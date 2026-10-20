@@ -1,3 +1,4 @@
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -14,6 +15,7 @@ import { getAppDataPath, isPendingService, rejectService, resolveService } from 
 import { memory } from '@cmdless/rpc-sdk';
 import type { Accept } from '@cmdless/rpc-sdk';
 import { file, startSocket } from '@cmdless/rpc-sdk/node';
+import { startWebSocket, closeWebSocketServer } from '@cmdless/rpc-sdk/ws/node';
 import { connectHangar, getHangarSocketPath, hangarProtocol } from '@cmdless/hangar-sdk/node';
 import type { AgentsState, HangarService, RegistryAgent, RestartParams } from '@cmdless/hangar-sdk';
 import { defaultAgents, resolveAgent, validEntry } from './agents.js';
@@ -114,7 +116,7 @@ async function main() {
   const createHangarHost = hangarProtocol.defineHost({
     state: {
       host: memory({
-        pid: process.pid, status: 'starting', instanceId: '', ahpAddress: '',
+        pid: process.pid, status: 'starting', instanceId: '', ahpAddress: '', webSocketAddress: '',
         stale: false, unavailable: {}, dataPath, registry: { status: 'idle' },
       }),
       agents: file(path.join(dataPath, 'agents.json'), { default: defaultAgents }),
@@ -203,7 +205,27 @@ async function main() {
   generation = createGeneration(resolveCurrent());
 
   // the address stays put across restarts: only the host behind it changes
-  const listener = await listen({ port: 0, host: '127.0.0.1' }, (peer, principal, root) => {
+  // anything on this machine can reach a loopback port - a web page in a
+  // browser included - so both network endpoints require a token, handed
+  // out only through the host state (the local socket, or a connection that
+  // already presented one)
+  const ahpToken = randomBytes(32).toString('base64url');
+  const hangarToken = randomBytes(32).toString('base64url');
+
+  const webSocket = await startWebSocket({
+    accept,
+    options: {
+      port: 0,
+      host: '127.0.0.1',
+      verifyClient: ({ req }: { req: { url?: string } }) => {
+        const presented = new URL(req.url ?? '', 'ws://hangar').searchParams.get('token') ?? '';
+        return presented.length === hangarToken.length && timingSafeEqual(Buffer.from(presented), Buffer.from(hangarToken));
+      },
+    },
+  });
+  const webSocketPort = (webSocket.address() as net.AddressInfo).port;
+
+  const listener = await listen({ port: 0, host: '127.0.0.1', token: ahpToken }, (peer, principal, root) => {
     const current = generation!;
     const accepted = current.host.accept(peer, principal, root);
     const connection = { peer, close: accepted.close };
@@ -219,7 +241,9 @@ async function main() {
 
   const { instanceId, unavailable } = generation;
   void store.update('host', host => Object.assign(host, {
-    status: 'ready', instanceId, unavailable, ahpAddress: `ws://${listener.host}:${listener.port}`,
+    status: 'ready', instanceId, unavailable,
+    ahpAddress: `ws://${listener.host}:${listener.port}/?tkn=${ahpToken}`,
+    webSocketAddress: `ws://127.0.0.1:${webSocketPort}/?token=${hangarToken}`,
   }));
 
   let stopping = false;
@@ -228,6 +252,9 @@ async function main() {
     stopping = true;
     if (generation) await closeGeneration(generation);
     await listener.close();
+    // ws's close waits for its clients rather than dropping them
+    for (const client of webSocket.clients) client.terminate();
+    await closeWebSocketServer(webSocket).catch(() => { });
     lock!.close();
     process.exit(0);
   }

@@ -13,8 +13,11 @@ export type HostState = {
   // changes every time the daemon (re)creates its AHP host - a client that
   // sees a new one knows its AHP connection is to a host that's gone
   instanceId: string;
-  // where the AHP host is served; the same across restarts
+  // where the AHP host is served, token included; the same across restarts
   ahpAddress: string;
+  // hangar's own protocol over WebSocket, token included - for clients that
+  // can't reach its local socket, like a browser
+  webSocketAddress: string;
   // the agents changed since this host started, and a restart applies them
   stale: boolean;
   // agents the running host couldn't serve, and why
