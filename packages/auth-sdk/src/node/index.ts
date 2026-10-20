@@ -13,6 +13,13 @@ export function getAuthSocketPath() {
 export async function connectAuth(address = getAuthSocketPath()) {
   const peer = await connectSocket(authProtocol, { path: address });
   peer.listen();
+  // a daemon that speaks another version fails loudly here, not later
+  try {
+    await peer.checkVersion();
+  } catch (error) {
+    peer.dispose();
+    throw error;
+  }
   return peer;
 }
 

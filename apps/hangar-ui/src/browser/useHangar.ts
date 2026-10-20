@@ -35,10 +35,11 @@ export function useHangar() {
 
     findHangar()
       .then(url => connectWebSocket(hangarProtocol, { url }))
-      .then(hangar => {
+      .then(async hangar => {
         if (disposed) { hangar.dispose(); return; }
         connected = hangar;
         hangar.listen();
+        await hangar.checkVersion();
         setClient(hangar);
       })
       .catch(reason => setError(String(reason)));

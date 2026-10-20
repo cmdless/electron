@@ -79,6 +79,9 @@ export type OfferParams = Omit<Offer, 'id'>;
 export type SettingsUpdate = Partial<Omit<SettingsState, 'deviceId'>>;
 
 export const peerlinkProtocol = defineProtocol(({ side, request, state }) => ({
+  // bump only for a change that breaks clients - adding things doesn't
+  name: 'peerlink',
+  version: 1,
   clientToServer: side({
     requests: {
       // a lease: the offer lasts as long as the connection that made it

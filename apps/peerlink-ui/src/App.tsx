@@ -61,6 +61,7 @@ function HangarView({ deviceId, device, offer }: { deviceId: string; device: Dev
       setPhase('Opening hangar…')
       const hangar = hangarProtocol.createClient(await link.open({ offerId: offer.id }))
       hangar.listen()
+      await hangar.checkVersion()
       await hangar.state.host.subscribe(setHost)
       await hangar.state.agents.subscribe(setAgents)
       setPhase('Connected')

@@ -1,4 +1,4 @@
-import { connectOrStart, getMetaPackageVersion, getTmpSocketPath, resolvePackageExport } from '@cmdless/core/node';
+import { connectOrStart, getMetaPackageVersion, getTmpSocketPath, nothingAnswers, resolvePackageExport } from '@cmdless/core/node';
 import { connectSocket } from '@cmdless/rpc-sdk/node';
 import { peerlinkProtocol } from '../index.js';
 import type { OfferParams } from '../index.js';
@@ -13,6 +13,13 @@ export function getPeerlinkSocketPath() {
 export async function connectPeerlink(address = getPeerlinkSocketPath()) {
   const peer = await connectSocket(peerlinkProtocol, { path: address });
   peer.listen();
+  // a daemon that speaks another version fails loudly here, not later
+  try {
+    await peer.checkVersion();
+  } catch (error) {
+    peer.dispose();
+    throw error;
+  }
   return peer;
 }
 
@@ -28,13 +35,14 @@ export type RunPeerlinkOptions = {
 
 // connects to this device's peerlink, starting it first if nothing answers.
 // The daemon comes from the local install when there is one, or else the
-// version matching this SDK, installed into the cmdless root. (The daemon
-// is shared: once it's running, every client gets that one, whatever its
-// own SDK version.)
+// version matching this SDK, installed into the cmdless root. The daemon
+// is shared, so one that's already running is used - unless it speaks
+// another protocol version, which fails loudly.
 export async function runPeerlink(options: RunPeerlinkOptions = {}) {
   try {
     return await connectPeerlink();
-  } catch {
+  } catch (error) {
+    if (!nothingAnswers(error)) throw error;
     const version = await getMetaPackageVersion('@cmdless/peerlink-sdk', import.meta);
     const daemonPath = await resolvePackageExport(import.meta, '@cmdless/peerlink', './daemon', { version, ...options });
     return connectOrStart(connectPeerlink, daemonPath);

@@ -13,6 +13,13 @@ export function getHangarSocketPath(name = 'hangar') {
 export async function connectHangar(address = getHangarSocketPath()) {
   const peer = await connectSocket(hangarProtocol, { path: address });
   peer.listen();
+  // a daemon that speaks another version fails loudly here, not later
+  try {
+    await peer.checkVersion();
+  } catch (error) {
+    peer.dispose();
+    throw error;
+  }
   return peer;
 }
 

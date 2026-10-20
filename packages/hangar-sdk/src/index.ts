@@ -83,6 +83,9 @@ export type RestartParams = {
 };
 
 export const hangarProtocol = defineProtocol(({ side, request, state }) => ({
+  // bump only for a change that breaks clients - adding things doesn't
+  name: 'hangar',
+  version: 1,
   clientToServer: side({
     requests: {
       restart: request<RestartParams, void>('host/restart'),

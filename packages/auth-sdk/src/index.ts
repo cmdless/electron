@@ -38,6 +38,9 @@ export function providerKey({ id, clientId }: Pick<OAuthProvider, 'id' | 'client
 }
 
 export const authProtocol = defineProtocol(({ side, request, state }) => ({
+  // bump only for a change that breaks clients - adding things doesn't
+  name: 'auth',
+  version: 1,
   clientToServer: side({
     requests: {
       // a valid access token: the stored one, refreshed when stale - or, with
