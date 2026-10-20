@@ -203,3 +203,30 @@ test('onClose runs once when either side ends the connection', async () => {
   server.dispose();
   assert.equal(closed, 1);
 });
+
+test('checkVersion passes when both sides speak the same protocol version', async () => {
+  const protocol = defineProtocol(({ side, request }) => ({
+    name: 'echo', version: 2,
+    clientToServer: side({ requests: { ping: request('ping') } }),
+  }));
+  const { clientConn, serverConn } = createLoopbackPair();
+  protocol.createServer(serverConn).listen();
+  const client = protocol.createClient(clientConn);
+  client.listen();
+  await client.checkVersion();
+});
+
+test('checkVersion fails loudly on a different version, or a server too old to say', async () => {
+  const define = (version?: number) => defineProtocol(({ side, request }) => ({
+    ...(version !== undefined && { name: 'echo', version }),
+    clientToServer: side({ requests: { ping: request('ping') } }),
+  }));
+
+  for (const [serverVersion, message] of [[1, /echo speaks protocol 1, but this client speaks 2/], [undefined, /older than this client/]] as const) {
+    const { clientConn, serverConn } = createLoopbackPair();
+    define(serverVersion).createServer(serverConn).listen();
+    const client = define(2).createClient(clientConn);
+    client.listen();
+    await assert.rejects(client.checkVersion(), message);
+  }
+});

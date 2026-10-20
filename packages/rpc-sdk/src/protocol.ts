@@ -2,6 +2,8 @@ import type { MessageConnection, Disposable } from "vscode-jsonrpc";
 import { NotificationType, RequestType } from "vscode-jsonrpc";
 import { MaybePromise } from "./shared.js";
 import { createStore, mirrorState, serveStore } from "./state.js";
+import { checkVersion, serveVersion } from "./version.js";
+import type { ProtocolIdentity } from "./version.js";
 import type { ClientState, RpcStore, StoreStorage } from "./state.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -151,7 +153,12 @@ export type ServerState<S extends Record<string, unknown>> =
   : {};
 
 export type RpcClient<Channel extends RpcChannel = RpcChannel, S extends Record<string, unknown> = {}> =
-  RpcPeer<Channel> & { state: ClientState<S> };
+  RpcPeer<Channel> & {
+    state: ClientState<S>;
+    // fails loudly (ProtocolMismatch) unless the server speaks this
+    // protocol's name and version - a no-op for a protocol that declares none
+    checkVersion: () => Promise<void>;
+  };
 export type RpcServer<Channel extends RpcChannel = RpcChannel, S extends Record<string, unknown> = {}> =
   RpcPeer<Channel> & { state: ServerState<S> };
 
@@ -166,16 +173,23 @@ function createRpcClient<Channel extends RpcChannel, S extends Record<string, un
   channel: Channel,
   connection: MessageConnection,
   states: RpcStates,
+  identity?: ProtocolIdentity,
 ): RpcClient<Channel, S> {
-  return { ...peer(channel, connection), state: mirrorState<S>(connection, states) };
+  return {
+    ...peer(channel, connection),
+    state: mirrorState<S>(connection, states),
+    checkVersion: async () => { if (identity) await checkVersion(connection, identity); },
+  };
 }
 
 function createRpcServer<Channel extends RpcChannel, S extends Record<string, unknown>>(
   channel: Channel,
   connection: MessageConnection,
   store: ServerStore<S>,
+  identity?: ProtocolIdentity,
 ): RpcServer<Channel, S> {
   if (store) serveStore(connection, store);
+  if (identity) serveVersion(connection, identity);
   const state = store
     ? { get current() { return store.state; }, set: store.set, update: store.update }
     : {};
@@ -208,6 +222,7 @@ export type RpcProtocol<
   client: Client;
   server: Server;
   state: States;
+  identity?: ProtocolIdentity;
   createClient: (connection: MessageConnection) => RpcClient<Client, StateValues<States>>;
 
   // these are methods, not function properties, so a specific protocol
@@ -229,18 +244,19 @@ function protocol<Client extends RpcChannel, Server extends RpcChannel, States e
   client: Client,
   server: Server,
   state: States,
+  identity?: ProtocolIdentity,
 ): RpcProtocol<Client, Server, States> {
   type S = StateValues<States>;
 
   function createServer(connection: MessageConnection, ...[store]: ServerStoreArgs<S>) {
-    return createRpcServer<Server, S>(server, connection, store as ServerStore<S>);
+    return createRpcServer<Server, S>(server, connection, store as ServerStore<S>, identity);
   }
 
   return {
     client,
     server,
     state,
-    createClient(connection) { return createRpcClient<Client, S>(client, connection, state); },
+    createClient(connection) { return createRpcClient<Client, S>(client, connection, state, identity); },
     createStore(storage) { return createStore(state, storage); },
     createServer,
     defineHost({ configure, state: storage }) {
@@ -285,6 +301,10 @@ function state<S>(name: string): RpcState<S> {
 }
 
 export type RpcProtocolSpec = Partial<{
+  // who this protocol is, for checkVersion: the version only goes up when a
+  // change breaks clients
+  name: string;
+  version: number;
   clientToServer: RpcSide;
   serverToClient: RpcSide;
   eitherToEither: RpcSide;
@@ -320,5 +340,6 @@ export function defineProtocol<const P extends RpcProtocolSpec>(factory: Protoco
   const eitherToEither = getSide(spec, 'eitherToEither');
   const client = channel(mergeSides(clientToServer, eitherToEither), mergeSides(serverToClient, eitherToEither));
   const server = channel(mergeSides(serverToClient, eitherToEither), mergeSides(clientToServer, eitherToEither));
-  return protocol(client, server, (spec.state ?? {}) as StatesOf<P>);
+  const identity = spec.name !== undefined && spec.version !== undefined ? { name: spec.name, version: spec.version } : undefined;
+  return protocol(client, server, (spec.state ?? {}) as StatesOf<P>, identity);
 }
