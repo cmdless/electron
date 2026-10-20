@@ -6,11 +6,13 @@ import {
 import { IconArrowUp, IconPlayerStopFilled, IconPlus, IconSearch } from '@tabler/icons-react';
 import Markdown from 'react-markdown';
 import type {
-  ActiveTurn, AgentInfo, ChatState, ConfigPropertySchema, ModelSelection, ResponsePart, SessionState, Turn, URI,
+  ActiveTurn, AgentInfo, ChatState, ConfigPropertySchema, InputRequestResponsePart, ModelSelection, ResponsePart, SessionState,
+  ToolCallState, Turn, URI,
 } from '@microsoft/agent-host-protocol';
 import { ScreenLayout } from '../layout';
 import { cancelTurn, createSession, pushTrust, sendMessage, setSessionConfig, useAhp, useChat, useSession } from '../ahp';
 import { useHangarClient } from '../hangar';
+import { InputRequestPart, ToolCallPart, TurnContext } from './Prompts';
 import { useChannel } from '../useHangar';
 import type { Ahp } from '../ahp';
 
@@ -66,16 +68,10 @@ function Part({ part }: { part: ResponsePart }) {
           <Text size="sm" c="dimmed" style={{ whiteSpace: 'pre-wrap' }}>{(part as { content: string }).content}</Text>
         </Spoiler>
       );
-    case 'toolCall': {
-      const call = (part as { toolCall: { displayName: string; intention?: string; status: string } }).toolCall;
-      return (
-        <Group gap="xs">
-          <Badge variant="light" radius="sm">{call.displayName}</Badge>
-          {call.intention && <Text size="sm" c="dimmed" truncate>{call.intention}</Text>}
-          <Text size="xs" c="dimmed">{call.status}</Text>
-        </Group>
-      );
-    }
+    case 'toolCall':
+      return <ToolCallPart call={(part as { toolCall: ToolCallState }).toolCall} />;
+    case 'inputRequest':
+      return <InputRequestPart part={part as InputRequestResponsePart} />;
     case 'error':
       return <Text c="red" size="sm">{(part as { error: { message?: string } }).error.message ?? 'Something went wrong'}</Text>;
     default:
@@ -198,7 +194,11 @@ function Conversation({ ahp, agent, session, sessionUri, uri }: { ahp: Ahp; agen
   return (
     <Stack maw={860} mx="auto" gap="xl">
       {chat.turns.map(turn => <TurnView key={turn.id} turn={turn} />)}
-      {chat.activeTurn && <TurnView turn={chat.activeTurn} />}
+      {chat.activeTurn && (
+        <TurnContext.Provider value={{ ahp, chat: uri, turnId: chat.activeTurn.id }}>
+          <TurnView turn={chat.activeTurn} />
+        </TurnContext.Provider>
+      )}
       <Box pos="sticky" bottom={0} pb="md" bg="var(--mantine-color-body)">{composer}</Box>
     </Stack>
   );

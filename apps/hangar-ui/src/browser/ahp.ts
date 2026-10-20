@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { chatReducer, rootReducer, sessionReducer, SUPPORTED_PROTOCOL_VERSIONS } from '@microsoft/agent-host-protocol';
 import type {
-  ChatAction, ChatState, ModelSelection, RootAction, RootState, SessionAction, SessionState, SessionSummary, StateAction, URI,
+  ChatAction, ChatInputAnswer, ChatState, ModelSelection, RootAction, RootState, SessionAction, SessionState, SessionSummary, StateAction, URI,
 } from '@microsoft/agent-host-protocol';
 import { AhpClient } from '@microsoft/agent-host-protocol/client';
 import { WebSocketTransport } from '@microsoft/agent-host-protocol/ws';
@@ -172,6 +172,19 @@ export function sendMessage(ahp: Ahp, chat: URI, text: string, model?: ModelSele
 
 export const cancelTurn = (ahp: Ahp, chat: URI, turnId: string) =>
   dispatch(ahp, chat, { type: 'chat/turnCancelled', turnId });
+
+// answers a tool call waiting on a person: approved or denied, with the
+// option the agent offered when it offered some
+export function confirmToolCall(ahp: Ahp, chat: URI, turnId: string, toolCallId: string, approved: boolean, optionId?: string) {
+  const selected = optionId ? { selectedOptionId: optionId } : {};
+  dispatch(ahp, chat, approved
+    ? { type: 'chat/toolCallConfirmed', turnId, toolCallId, approved: true, confirmed: 'user-action', ...selected }
+    : { type: 'chat/toolCallConfirmed', turnId, toolCallId, approved: false, reason: 'denied', ...selected });
+}
+
+// answers an agent's question: accepted with the answers, declined or cancelled
+export const completeInput = (ahp: Ahp, chat: URI, requestId: string, response: 'accept' | 'decline' | 'cancel', answers?: Record<string, ChatInputAnswer>) =>
+  dispatch(ahp, chat, { type: 'chat/inputCompleted', requestId, response, ...(answers ? { answers } : {}) });
 
 export const setSessionConfig = (ahp: Ahp, session: URI, config: Record<string, unknown>) =>
   dispatch(ahp, session, { type: 'session/configChanged', config });
