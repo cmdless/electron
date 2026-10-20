@@ -207,6 +207,13 @@ export async function listenExclusive(server: net.Server, socketPath: string): P
   return true;
 }
 
+// whether connecting failed because no daemon is there to answer - no
+// socket, or a stale one nothing listens on
+export function nothingAnswers(error: unknown) {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === 'ENOENT' || code === 'ECONNREFUSED';
+}
+
 // what a daemon resolves as a service: only where to reach it
 export type DaemonService = { address: string };
 
@@ -216,7 +223,10 @@ export type DaemonService = { address: string };
 export async function connectOrStart<T>(connect: (address?: string) => Promise<T>, daemonPath: string): Promise<T> {
   try {
     return await connect();
-  } catch {
+  } catch (error) {
+    // only "nothing is there" starts one - anything else (a daemon that
+    // answered but won't do, say) is the caller's to see
+    if (!nothingAnswers(error)) throw error;
     const { value } = await waitForService<DaemonService>(process.execPath, [daemonPath]);
     return connect(value.address);
   }
