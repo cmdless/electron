@@ -1,15 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  Badge, Box, Center, Group, Loader, NavLink, Paper, ScrollArea, Select, Spoiler, Stack, Text, TextInput,
+  ActionIcon, Badge, Box, Button, Center, Group, Loader, NavLink, Paper, Popover, ScrollArea, Select, Spoiler, Stack, Text,
+  Textarea, TextInput,
 } from '@mantine/core';
-import { IconSearch } from '@tabler/icons-react';
+import { IconArrowUp, IconPlayerStopFilled, IconPlus, IconSearch } from '@tabler/icons-react';
 import Markdown from 'react-markdown';
-import type { ActiveTurn, ResponsePart, SessionState, Turn } from '@microsoft/agent-host-protocol';
-import type { AhpClient } from '@microsoft/agent-host-protocol/client';
+import type {
+  ActiveTurn, AgentInfo, ChatState, ConfigPropertySchema, ModelSelection, ResponsePart, SessionState, Turn, URI,
+} from '@microsoft/agent-host-protocol';
 import { ScreenLayout } from '../layout';
-import { useAhp, useChat, useSession } from '../ahp';
+import { cancelTurn, createSession, sendMessage, setSessionConfig, useAhp, useChat, useSession } from '../ahp';
+import type { Ahp } from '../ahp';
 
 const AGENT_KEY = 'hangar-ui:agent';
+const modelKey = (provider: string) => `hangar-ui:model:${provider}`;
+const folderKey = (provider: string) => `hangar-ui:folder:${provider}`;
 
 // SessionStatus is a bit field: InProgress is 1 << 3, InputNeeded adds 1 << 4
 const statusOf = (status: number) =>
@@ -29,6 +34,23 @@ function ago(iso: string) {
 // the conversation a session opens on: its default chat, or its first
 function chatOf(session: SessionState) {
   return session.defaultChat ?? session.chats?.[0]?.resource;
+}
+
+function readModel(provider: string): ModelSelection | undefined {
+  try {
+    return JSON.parse(localStorage.getItem(modelKey(provider)) ?? 'null') ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// the properties of a schema that are a pick from a list, as dropdowns
+function enumsOf(properties: Record<string, ConfigPropertySchema> = {}) {
+  return Object.entries(properties).filter(([, property]) => property.enum && !property.readOnly).map(([key, property]) => ({
+    key,
+    property,
+    data: property.enum!.map((value, index) => ({ value: String(value), label: property.enumLabels?.[index] ?? String(value) })),
+  }));
 }
 
 function Part({ part }: { part: ResponsePart }) {
@@ -74,28 +96,169 @@ function TurnView({ turn }: { turn: Turn | ActiveTurn }) {
   );
 }
 
-function Conversation({ client, uri }: { client: AhpClient; uri: string }) {
-  const chat = useChat(client, uri);
-  if (!chat) return <Center h="100%"><Loader size="sm" /></Center>;
-  if (chat.turns.length === 0 && !chat.activeTurn)
-    return <Center h="100%"><Text c="dimmed">No messages yet.</Text></Center>;
+// the message box and the dropdowns under it: the model and its options,
+// which go with each message, and the session's own settings, which change
+// the session as they're picked
+function Composer({ ahp, agent, session, sessionUri, chatUri, chat }: {
+  ahp: Ahp;
+  agent: AgentInfo | undefined;
+  session: SessionState;
+  sessionUri: URI;
+  chatUri: URI;
+  chat: ChatState;
+}) {
+  const provider = agent?.provider ?? '';
+  const [text, setText] = useState('');
+  const [model, setModel] = useState<ModelSelection | undefined>(() => readModel(provider));
+  useEffect(() => { if (model) localStorage.setItem(modelKey(provider), JSON.stringify(model)); }, [provider, model]);
+
+  const models = agent?.models ?? [];
+  // the remembered model, if the agent still has it
+  const current = models.find(each => each.id === model?.id);
+  const modelOptions = enumsOf(current?.configSchema?.properties);
+  const sessionOptions = enumsOf(session.config?.schema.properties as Record<string, ConfigPropertySchema> | undefined);
+  const active = chat.activeTurn;
+
+  const send = () => {
+    if (!text.trim() || active) return;
+    sendMessage(ahp, chatUri, text, current ? { id: current.id, ...(model?.config ? { config: model.config } : {}) } : undefined);
+    setText('');
+  };
+
   return (
-    <Stack gap="xl" maw={860} mx="auto" pb="xl">
+    <Paper withBorder radius="lg" p="xs">
+      <Textarea
+        variant="unstyled" autosize minRows={2} maxRows={12} px="xs" autoFocus
+        placeholder={`Message ${agent?.displayName ?? 'the agent'}`}
+        value={text} onChange={event => setText(event.currentTarget.value)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            send();
+          }
+        }}
+      />
+      <Group gap="xs" justify="space-between" wrap="nowrap">
+        <Group gap="xs">
+          {models.length > 0 && (
+            <Select
+              size="xs" w={200} placeholder="Default model" clearable searchable
+              data={models.map(each => ({ value: each.id, label: each.name }))}
+              value={current?.id ?? null}
+              onChange={id => setModel(id ? { id } : undefined)}
+            />
+          )}
+          {modelOptions.map(({ key, property, data }) => (
+            <Select
+              key={`model:${key}`} size="xs" w={150} placeholder={property.title} data={data} clearable
+              value={model?.config?.[key] !== undefined ? String(model.config[key]) : property.default !== undefined ? String(property.default) : null}
+              onChange={value => setModel(previous => previous && {
+                ...previous,
+                config: { ...previous.config, [key]: property.enum!.find(each => String(each) === value) ?? null },
+              })}
+            />
+          ))}
+          {sessionOptions.map(({ key, property, data }) => (
+            <Select
+              key={`session:${key}`} size="xs" w={150} placeholder={property.title} data={data} allowDeselect={false}
+              value={session.config?.values[key] !== undefined ? String(session.config.values[key]) : null}
+              onChange={value => setSessionConfig(ahp, sessionUri, {
+                [key]: property.enum!.find(each => String(each) === value),
+              })}
+            />
+          ))}
+        </Group>
+        {active
+          ? <ActionIcon radius="xl" size="lg" color="red" aria-label="Stop" onClick={() => cancelTurn(ahp, chatUri, active.id)}><IconPlayerStopFilled size={16} /></ActionIcon>
+          : <ActionIcon radius="xl" size="lg" aria-label="Send" disabled={!text.trim()} onClick={send}><IconArrowUp size={18} /></ActionIcon>}
+      </Group>
+    </Paper>
+  );
+}
+
+// a session's chat: the composer alone in the middle until the first message,
+// then the conversation with the composer pinned under it
+function Conversation({ ahp, agent, session, sessionUri, uri }: { ahp: Ahp; agent: AgentInfo | undefined; session: SessionState; sessionUri: URI; uri: URI }) {
+  const chat = useChat(ahp.client, uri);
+  if (!chat) return <Center h="60vh"><Loader size="sm" /></Center>;
+  const composer = <Composer ahp={ahp} agent={agent} session={session} sessionUri={sessionUri} chatUri={uri} chat={chat} />;
+
+  if (chat.turns.length === 0 && !chat.activeTurn)
+    return (
+      <Center h="70vh">
+        <Stack w="100%" maw={760} gap="md">
+          <Text size="xl" fw={600} ta="center">What should {agent?.displayName ?? 'the agent'} do?</Text>
+          {composer}
+        </Stack>
+      </Center>
+    );
+
+  return (
+    <Stack maw={860} mx="auto" gap="xl">
       {chat.turns.map(turn => <TurnView key={turn.id} turn={turn} />)}
       {chat.activeTurn && <TurnView turn={chat.activeTurn} />}
+      <Box pos="sticky" bottom={0} pb="md" bg="var(--mantine-color-body)">{composer}</Box>
     </Stack>
+  );
+}
+
+// starts a session in a folder, the last one used with this agent by default
+function NewSession({ ahp, provider, onCreated }: { ahp: Ahp; provider: string; onCreated: (uri: URI) => void }) {
+  const [opened, setOpened] = useState(false);
+  const [folder, setFolder] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const create = () => {
+    setBusy(true);
+    setError(undefined);
+    const where = folder.trim();
+    createSession(ahp, provider, where || undefined)
+      .then(uri => {
+        if (where) localStorage.setItem(folderKey(provider), where);
+        else localStorage.removeItem(folderKey(provider));
+        setOpened(false);
+        onCreated(uri);
+      })
+      .catch(reason => setError(String(reason?.message ?? reason)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Popover opened={opened} onChange={setOpened} position="bottom-start" width={320} trapFocus>
+      <Popover.Target>
+        <Button
+          size="xs" variant="light" leftSection={<IconPlus size={14} />} fullWidth
+          onClick={() => { setFolder(localStorage.getItem(folderKey(provider)) ?? ''); setError(undefined); setOpened(value => !value); }}
+        >
+          New session
+        </Button>
+      </Popover.Target>
+      <Popover.Dropdown>
+        <Stack gap="xs">
+          <TextInput
+            size="xs" label="Folder" placeholder="The agent's default" data-autofocus
+            value={folder} onChange={event => setFolder(event.currentTarget.value)}
+            onKeyDown={event => { if (event.key === 'Enter') create(); }}
+          />
+          {error && <Text c="red" size="xs">{error}</Text>}
+          <Button size="xs" loading={busy} onClick={create}>Create</Button>
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
   );
 }
 
 export default function Chat() {
   const { ahp, error } = useAhp();
   const [agent, setAgent] = useState<string | null>(() => localStorage.getItem(AGENT_KEY));
-  const [selected, setSelected] = useState<string>();
+  const [selected, setSelected] = useState<URI>();
   const [filter, setFilter] = useState('');
 
   const agents = ahp?.root.agents ?? [];
   // the remembered agent, if this host still has it, or else its first
   const current = agents.some(each => each.provider === agent) ? agent : agents[0]?.provider ?? null;
+  const agentInfo = agents.find(each => each.provider === current);
   useEffect(() => { if (current) localStorage.setItem(AGENT_KEY, current); }, [current]);
 
   const sessions = useMemo(() => Object.values(ahp?.sessions ?? {})
@@ -103,9 +266,11 @@ export default function Chat() {
     .filter(session => !filter || session.title.toLowerCase().includes(filter.toLowerCase()))
     .sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt)), [ahp?.sessions, current, filter]);
 
-  const open = selected ? ahp?.sessions[selected] : undefined;
-  const session = useSession(ahp?.client, open?.resource);
+  // subscribed by the name it was picked or made under, which for a session
+  // just created may be before the list has it
+  const session = useSession(ahp?.client, selected);
   const chat = session && chatOf(session);
+  const title = (selected && ahp?.sessions[selected]?.title) || session?.title || 'Chat';
 
   const headerRight = (
     <Select
@@ -117,9 +282,10 @@ export default function Chat() {
 
   const navbar = (
     <>
-      <Box p="xs">
+      <Stack p="xs" gap="xs">
+        {ahp && current && <NewSession ahp={ahp} provider={current} onCreated={setSelected} />}
         <TextInput size="xs" placeholder="Filter sessions" leftSection={<IconSearch size={14} />} value={filter} onChange={event => setFilter(event.currentTarget.value)} />
-      </Box>
+      </Stack>
       <ScrollArea style={{ flex: 1 }}>
         {sessions.map(session => {
           const status = statusOf(session.status as number);
@@ -140,13 +306,13 @@ export default function Chat() {
   );
 
   return (
-    <ScreenLayout title={open?.title || 'Chat'} headerRight={headerRight} navbar={navbar}>
+    <ScreenLayout title={title} headerRight={headerRight} navbar={navbar}>
       {error && <Text c="red">{error}</Text>}
       {!error && !ahp && <Center h="60vh"><Loader size="sm" /></Center>}
-      {ahp && !open && <Center h="60vh"><Text c="dimmed">Pick a session.</Text></Center>}
-      {ahp && open && !session && <Center h="60vh"><Loader size="sm" /></Center>}
-      {ahp && session && !chat && <Center h="60vh"><Text c="dimmed">This session has no chat to show.</Text></Center>}
-      {ahp && chat && <Conversation key={chat} client={ahp.client} uri={chat} />}
+      {ahp && !selected && <Center h="60vh"><Text c="dimmed">Pick a session, or start a new one.</Text></Center>}
+      {ahp && selected && !session && <Center h="60vh"><Loader size="sm" /></Center>}
+      {ahp && session && !chat && <Center h="60vh"><Loader size="sm" /></Center>}
+      {ahp && session && chat && <Conversation key={chat} ahp={ahp} agent={agentInfo} session={session} sessionUri={selected!} uri={chat} />}
     </ScreenLayout>
   );
 }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { chatReducer, rootReducer, sessionReducer, SUPPORTED_PROTOCOL_VERSIONS } from '@microsoft/agent-host-protocol';
-import type { ChatAction, ChatState, RootAction, RootState, SessionAction, SessionState, SessionSummary, URI } from '@microsoft/agent-host-protocol';
+import type {
+  ChatAction, ChatState, ModelSelection, RootAction, RootState, SessionAction, SessionState, SessionSummary, StateAction, URI,
+} from '@microsoft/agent-host-protocol';
 import { AhpClient } from '@microsoft/agent-host-protocol/client';
 import { WebSocketTransport } from '@microsoft/agent-host-protocol/ws';
 import { useHangarClient } from './hangar';
@@ -10,6 +12,7 @@ export const ROOT = 'ahp-root://';
 
 export type Ahp = {
   client: AhpClient;
+  clientId: string;
   root: RootState;
   // every session the host lists, by resource
   sessions: Record<URI, SessionSummary>;
@@ -49,15 +52,16 @@ export function useAhp() {
       client = new AhpClient(await WebSocketTransport.connect(address));
       if (closed) return void client.shutdown();
       client.connect();
+      const clientId = `hangar-ui-${crypto.randomUUID()}`;
       const init = await client.initialize({
-        clientId: `hangar-ui-${crypto.randomUUID()}`,
+        clientId,
         protocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
         initialSubscriptions: [ROOT],
       });
       let root = init.snapshots.find(snapshot => snapshot.resource === ROOT)?.state as RootState;
       let sessions = await listAllSessions(client);
       if (closed) return;
-      const update = () => setAhp({ client: client!, root, sessions });
+      const update = () => setAhp({ client: client!, clientId, root, sessions });
       update();
 
       for await (const event of client.attachSubscription(ROOT)) {
@@ -87,23 +91,24 @@ export function useAhp() {
 // one channel's state from its snapshot, folded forward through its actions
 // with the protocol's own reducer, for as long as the component is mounted
 export function useAhpChannel<S, A>(client: AhpClient | undefined, uri: URI | undefined, reduce: (state: S, action: A) => S) {
-  const [state, setState] = useState<S>();
+  // kept with the client and channel it came from, so a component that moves
+  // to another channel - or none - never shows the last one's state
+  const [held, setHeld] = useState<{ client: AhpClient; uri: URI; state: S }>();
 
   useEffect(() => {
     if (!client || !uri) return;
     let closed = false;
-    setState(undefined);
 
     (async () => {
       const { result, subscription } = await client.subscribe(uri);
       let current = result.snapshot?.state as S;
       if (closed) return void client.unsubscribe(uri).catch(() => { });
-      setState(current);
+      setHeld({ client, uri, state: current });
       for await (const event of subscription) {
         if (closed) break;
         if (event.type !== 'action') continue;
         current = reduce(current, event.params.action as A);
-        setState(current);
+        setHeld({ client, uri, state: current });
       }
     })().catch(() => { });
 
@@ -113,11 +118,44 @@ export function useAhpChannel<S, A>(client: AhpClient | undefined, uri: URI | un
     };
   }, [client, uri, reduce]);
 
-  return state;
+  return held && held.client === client && held.uri === uri ? held.state : undefined;
 }
 
 export const useChat = (client: AhpClient | undefined, uri: URI | undefined) =>
   useAhpChannel<ChatState, ChatAction>(client, uri, chatReducer as (state: ChatState, action: ChatAction) => ChatState);
+
+// a new session, named the way ahpd holds it - `<provider>:/<id>` - so it
+// matches the name the session list will carry. The creator joins it as an
+// active client, which is what lets it start turns.
+export async function createSession(ahp: Ahp, provider: string, folder?: string) {
+  const channel = `${provider}:/${crypto.randomUUID()}`;
+  await ahp.client.request('createSession', {
+    channel,
+    provider,
+    ...(folder ? { workingDirectories: [`file://${folder}`] } : {}),
+    activeClient: { clientId: ahp.clientId, displayName: 'Hangar UI', tools: [] },
+  });
+  return channel;
+}
+
+// the protocol's action types are const enums, so actions are written with
+// their string values and cast
+const dispatch = (ahp: Ahp, channel: URI, action: object) => ahp.client.dispatch(channel, action as StateAction);
+
+export function sendMessage(ahp: Ahp, chat: URI, text: string, model?: ModelSelection) {
+  dispatch(ahp, chat, {
+    type: 'chat/turnStarted',
+    turnId: crypto.randomUUID(),
+    startedAt: new Date().toISOString(),
+    message: { text, origin: { kind: 'user' }, ...(model ? { model } : {}) },
+  });
+}
+
+export const cancelTurn = (ahp: Ahp, chat: URI, turnId: string) =>
+  dispatch(ahp, chat, { type: 'chat/turnCancelled', turnId });
+
+export const setSessionConfig = (ahp: Ahp, session: URI, config: Record<string, unknown>) =>
+  dispatch(ahp, session, { type: 'session/configChanged', config });
 
 // subscribing to a session is also what opens it - a session listed from an
 // agent's own files is loaded, turns and all, when something subscribes
