@@ -1,8 +1,8 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import fs from 'node:fs';
-import net from 'node:net';
+import type net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createHost, listen, fileSessions, fileUsage, fileResources, shellTerminals,
   gitChanges, gitBranches, gitWorktrees, hostTools,
@@ -11,12 +11,12 @@ import type { Host, Peer } from '@ahpd/sdk';
 import { claude } from '@ahpd/agent-claude';
 import { acpAgent } from '@ahpd/agent-acp';
 import type { AcpOptions } from '@ahpd/agent-acp';
-import { getAppDataPath, isPendingService, rejectService, resolveService } from '@cmdless/core/node';
+import { getAppDataPath, isPendingService, listenExclusive, rejectService, resolveService } from '@cmdless/core/node';
 import { memory } from '@cmdless/rpc-sdk';
-import type { Accept } from '@cmdless/rpc-sdk';
-import { file, startSocket } from '@cmdless/rpc-sdk/node';
+import { createSocketServer, file } from '@cmdless/rpc-sdk/node';
 import { startWebSocket, closeWebSocketServer } from '@cmdless/rpc-sdk/ws/node';
-import { connectHangar, getHangarSocketPath, hangarProtocol } from '@cmdless/hangar-sdk/node';
+import { getHangarSocketPath, hangarProtocol } from '@cmdless/hangar-sdk/node';
+import { connectPeerlink, ensurePeerlink } from '@cmdless/peerlink-sdk/node';
 import type { AgentsState, HangarService, RegistryAgent, RestartParams } from '@cmdless/hangar-sdk';
 import { defaultAgents, resolveAgent, validEntry } from './agents.js';
 import { fetchRegistry } from './registry.js';
@@ -85,29 +85,6 @@ async function closeGeneration({ host, connections }: Generation) {
   }
   connections.clear();
   await host.close();
-}
-
-// binds the lock socket, or answers whether another daemon already holds
-// it. A Unix socket outlives a crashed daemon as a file nothing listens on,
-// so a refused connection means it's stale and safe to replace - a named
-// pipe on Windows goes away with its process, so it's never stale.
-async function bindLock(accept: Accept): Promise<net.Server | undefined> {
-  const path = getHangarSocketPath();
-  try {
-    return await startSocket({ accept, options: { path } });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error;
-  }
-
-  try {
-    (await connectHangar()).dispose();
-    return undefined;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ECONNREFUSED') throw error;
-  }
-
-  fs.rmSync(path, { force: true });
-  return startSocket({ accept, options: { path } });
 }
 
 async function main() {
@@ -185,12 +162,14 @@ async function main() {
     return refreshing;
   }
 
-  const lock = await bindLock(accept);
+  // the socket is the lock: whoever listens on it is the one daemon
+  const lock = createSocketServer(accept);
+  const held = await listenExclusive(lock, getHangarSocketPath());
   const service: HangarService = { address: getHangarSocketPath() };
 
   // another daemon won the race to the lock - it lives at the same address,
   // so that's what this one hands back before leaving
-  if (!lock) {
+  if (!held) {
     if (isPendingService()) await resolveService(service);
     return;
   }
@@ -255,13 +234,33 @@ async function main() {
     // ws's close waits for its clients rather than dropping them
     for (const client of webSocket.clients) client.terminate();
     await closeWebSocketServer(webSocket).catch(() => { });
-    lock!.close();
+    lock.close();
     process.exit(0);
   }
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 
   if (isPendingService()) await resolveService(service);
+
+  // offers both addresses on this device's peerlink, starting it the first
+  // time. The offers last as long as this connection, so if peerlink goes
+  // away hangar reconnects and offers again - without starting it, so
+  // stopping peerlink on purpose sticks.
+  const peerlinkDaemonPath = fileURLToPath(import.meta.resolve('@cmdless/peerlink/daemon'));
+  const offerOnPeerlink = async (start: boolean) => {
+    if (stopping) return;
+    try {
+      const peerlink = start ? await ensurePeerlink(peerlinkDaemonPath) : await connectPeerlink();
+      peerlink.onClose(() => { if (!stopping) setTimeout(() => offerOnPeerlink(false), 5_000); });
+      const { webSocketAddress, ahpAddress } = store.state.host;
+      await peerlink.request.offer({ kind: 'hangar', name: 'hangar', address: webSocketAddress });
+      await peerlink.request.offer({ kind: 'ahp', name: 'hangar (AHP)', address: ahpAddress });
+    } catch (error) {
+      if (start) console.error('hangar: offering on peerlink failed:', error);
+      setTimeout(() => offerOnPeerlink(false), 5_000);
+    }
+  };
+  void offerOnPeerlink(true);
 }
 
 main().catch(async error => {

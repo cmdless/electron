@@ -20,6 +20,9 @@
     },
     {
       "path": "../../packages/hangar-sdk"
+    },
+    {
+      "path": "../../packages/peerlink-sdk"
     }
   ]
 }

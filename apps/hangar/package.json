@@ -31,6 +31,8 @@
     "@ahpd/sdk": "0.12.0",
     "@cmdless/core": "*",
     "@cmdless/hangar-sdk": "*",
+    "@cmdless/peerlink": "*",
+    "@cmdless/peerlink-sdk": "*",
     "@cmdless/rpc-sdk": "*"
   },
   "exports": {
