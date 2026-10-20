@@ -1,3 +1,4 @@
+import '#ral'; // installs vscode-jsonrpc's runtime layer for whichever environment this runs in
 import { createMessageConnection, } from 'vscode-jsonrpc';
 import type {
   MessageConnection,

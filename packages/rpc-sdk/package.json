@@ -34,6 +34,14 @@
       "import": "./dist/index.js"
     }
   },
+  "imports": {
+    "#ral": {
+      "types": "./dist/ral/node.d.ts",
+      "browser": "./dist/ral/browser.js",
+      "node": "./dist/ral/node.js",
+      "default": "./dist/ral/browser.js"
+    }
+  },
   "files": [
     "dist/",
     "LICENSE",

@@ -1,4 +1,3 @@
-import 'vscode-jsonrpc/node'; // installs the Node runtime abstraction layer the loopback tests run under
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import jsonpatch from 'fast-json-patch';

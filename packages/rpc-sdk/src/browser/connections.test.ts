@@ -1,4 +1,3 @@
-import 'vscode-jsonrpc/browser'; // installs the browser runtime abstraction layer this test runs under
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageChannel } from 'node:worker_threads';

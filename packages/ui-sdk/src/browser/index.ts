@@ -1,4 +1,3 @@
-import 'vscode-jsonrpc/browser'; // installs the browser runtime abstraction layer WebSocketMessageReader/Writer need
 import type { RpcProtocol, RpcPeer } from '@cmdless/rpc-sdk';
 import { connectWebSocket } from '@cmdless/rpc-sdk/ws';
 import { Client as McpClient } from '@modelcontextprotocol/sdk/client/index.js';

@@ -1,4 +1,4 @@
-import '@cmdless/ui-sdk/browser' // installs window.cmdless's global type augmentation, and vscode-jsonrpc's browser runtime
+import '@cmdless/ui-sdk/browser' // installs window.cmdless's global type augmentation
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'

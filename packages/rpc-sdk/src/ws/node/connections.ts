@@ -1,4 +1,3 @@
-import 'vscode-jsonrpc/node'; // installs the Node runtime abstraction layer WebSocketMessageReader/Writer need
 import { WebSocketServer, type ServerOptions } from 'ws';
 import type { TransportParameters } from '../../shared.js';
 import { createWebSocket } from '../connections.js';
