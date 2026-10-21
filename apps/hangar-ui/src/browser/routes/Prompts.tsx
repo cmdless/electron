@@ -133,8 +133,10 @@ function initialValue(question: ChatInputQuestion, drafted: ChatInputAnswer | un
 
 const answeredAs: Record<string, string> = { accept: 'answered', decline: 'declined', cancel: 'cancelled' };
 
-// a question from the agent: a form for its questions, or a page to open,
-// then accept or decline. Once answered it says how.
+// a question from the agent: a form for its questions, then accept or
+// decline - or a page to open, which the host completes itself when the page's
+// own flow finishes, so it can only be cancelled from here. Once answered it
+// says how.
 export function InputRequestPart({ part }: { part: InputRequestResponsePart }) {
   const turn = useContext(TurnContext);
   const { request } = part;
@@ -165,17 +167,21 @@ export function InputRequestPart({ part }: { part: InputRequestResponsePart }) {
     <Paper withBorder p="sm" radius="md" style={{ borderColor: 'var(--mantine-color-orange-filled)' }}>
       <Stack gap="xs">
         {request.message && <Text size="sm" fw={500}>{request.message}</Text>}
-        {request.url && <Anchor href={request.url} target="_blank" size="sm">Open {new URL(request.url).host}</Anchor>}
+        {request.url && <Anchor href={request.url} target="_blank" size="sm">Open {new URL(request.url).host} here</Anchor>}
         {questions.map(question => (
           <Question
             key={question.id} question={question} value={values[question.id]}
             onChange={value => setValues(previous => ({ ...previous, [question.id]: value }))}
           />
         ))}
-        <Group gap="xs">
-          <Button size="xs" disabled={answered || missing} onClick={() => complete('accept')}>{request.url && questions.length === 0 ? 'Done' : 'Submit'}</Button>
-          <Button size="xs" variant="default" disabled={answered} onClick={() => complete('decline')}>Decline</Button>
-        </Group>
+        {request.url && questions.length === 0
+          ? <Group gap="xs"><Button size="xs" variant="default" disabled={answered} onClick={() => complete('cancel')}>Cancel</Button></Group>
+          : (
+            <Group gap="xs">
+              <Button size="xs" disabled={answered || missing} onClick={() => complete('accept')}>Submit</Button>
+              <Button size="xs" variant="default" disabled={answered} onClick={() => complete('decline')}>Decline</Button>
+            </Group>
+          )}
       </Stack>
     </Paper>
   );
