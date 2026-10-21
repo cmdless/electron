@@ -90,7 +90,9 @@ function browserUserAgent() {
 }
 
 async function createWindow(parameters: types.ShowParams, finish = resolve, parent?: BrowserWindow) {
-  const { app, address, type, source, width, height, redirect } = parameters;
+  const { app, address, type, source, width, height, redirect, title } = parameters;
+  // a third party's pages: a redirect window's, or ones said to be external
+  const external = redirect !== undefined || parameters.external === true;
 
   // a window can end more than one way (resolved, captured, closed) - only
   // the first counts
@@ -107,11 +109,10 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
     height: height ?? 670,
     show: false,
     autoHideMenuBar: true,
-    title: app,
+    title: title ?? app,
     webPreferences: {
-      // a redirect window shows a third party's pages (a sign-in, say), so
-      // it gets no window.cmdless
-      preload: redirect ? undefined : preloadPath,
+      // a third party's pages (a sign-in, say) get no window.cmdless
+      preload: external ? undefined : preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true
@@ -162,7 +163,10 @@ async function createWindow(parameters: types.ShowParams, finish = resolve, pare
   }
   win.on('ready-to-show', () => win.show());
 
-  if (redirect) {
+  // a title that was asked for stays, whatever the page calls itself
+  if (title) win.on('page-title-updated', event => event.preventDefault());
+
+  if (external) {
     // a sign-in's popups (say, "continue with Google") report back to the
     // page that opened them, so they open here as child windows rather
     // than in the default browser - with no preload either
@@ -283,6 +287,8 @@ function cli() {
     .option('--height <number>', 'Height of the window', Number)
     .option('--address <address>', 'Backend address')
     .option('--redirect <prefix>', 'End the window when it navigates to a URL starting with this, resolving to that URL')
+    .option('--external', 'Show a third party\'s pages: no preload, a browser user agent, popups as child windows')
+    .option('--title <title>', 'Title of the window, kept whatever the page calls itself')
     .action((type, source, options: types.ShowOptions) => run({ kind: 'show', type, source, ...options }));
 
   program

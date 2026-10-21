@@ -23,6 +23,12 @@ export const ShowOptionsSchema = SetupParamsSchema.extend({
   // to that URL - for an OAuth redirect, say. Such a window shows a third
   // party's pages, so it gets no preload (no window.cmdless).
   redirect: z.string().optional(),
+  // the window shows a third party's pages without capturing a redirect - a
+  // sign-in that finishes on its own, say - so it's treated like a redirect
+  // window: no preload, a browser's user agent, popups as child windows
+  external: z.boolean().optional(),
+  // the window's title, kept whatever the page calls itself
+  title: z.string().optional(),
 });
 export type ShowOptions = z.infer<typeof ShowOptionsSchema>;
 
