@@ -107,10 +107,16 @@ export function forwardSignals(child: import('node:child_process').ChildProcess)
 // unlike execFileSync, this doesn't block the event loop for the process's
 // whole lifetime - needed so forwardSignals (and anything else this process
 // wants to do concurrently) can actually run while `command` is alive.
-export function execProcess(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<string> {
+// runs a command to completion and resolves with its output. Aborting the
+// signal stops it (SIGTERM) and rejects with the signal's reason.
+export function execProcess(command: string, args: string[], env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
     const child = spawn(command, args, { env, stdio: ['inherit', 'pipe', 'inherit'] });
     forwardSignals(child);
+    const abort = () => { child.kill('SIGTERM'); reject(signal!.reason); };
+    signal?.addEventListener('abort', abort, { once: true });
+    child.once('exit', () => signal?.removeEventListener('abort', abort));
     const chunks: Buffer[] = [];
     child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
     child.once('error', reject);
@@ -121,8 +127,8 @@ export function execProcess(command: string, args: string[], env: NodeJS.Process
   });
 }
 
-export async function runPackage(packageName: string, prefix: string, args: string[] = [], cmdlessRoot?: string) {
-  return execProcess("npm", execPackageArgs(packageName, prefix, args), packageEnv(cmdlessRoot));
+export async function runPackage(packageName: string, prefix: string, args: string[] = [], cmdlessRoot?: string, signal?: AbortSignal) {
+  return execProcess("npm", execPackageArgs(packageName, prefix, args), packageEnv(cmdlessRoot), signal);
 }
 
 // unlike runPackage, this is for a long-running process (e.g. an Electron
@@ -131,9 +137,9 @@ export function spawnPackage(packageName: string, prefix: string, args: string[]
   return spawn("npm", execPackageArgs(packageName, prefix, args), { stdio: 'inherit', env });
 }
 
-export async function runAsPackage(parameters: PackageInstallParams, args: string[] = []) {
+export async function runAsPackage(parameters: PackageInstallParams, args: string[] = [], signal?: AbortSignal) {
   const { packageName, prefix, cmdlessRoot } = await ensurePackage(parameters);
-  return runPackage(packageName, prefix, args, cmdlessRoot);
+  return runPackage(packageName, prefix, args, cmdlessRoot, signal);
 }
 
 // resolves `packageName`'s bin locally first (via findLocalBinPath), falling

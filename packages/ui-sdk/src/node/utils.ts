@@ -154,15 +154,15 @@ export function acquireCmdlessUrl() {
   return url;
 }
 
-export async function runAsRuntime(meta: ImportMeta, args: string[] = [], cmdlessRoot?: string) {
+export async function runAsRuntime(meta: ImportMeta, args: string[] = [], cmdlessRoot?: string, signal?: AbortSignal) {
   const specifier = '@cmdless/ui-runtime';
   const binPath = findLocalBinPath(specifier, meta);
   if (binPath) {
     const root = cmdlessRoot ?? getCmdlessRoot();
-    return execProcess(process.execPath, [binPath, ...args], packageEnv(root));
+    return execProcess(process.execPath, [binPath, ...args], packageEnv(root), signal);
   }
   const version = await getMetaPackageVersion('@cmdless/ui-sdk', meta);
-  return await runAsPackage({ specifier, version, cmdlessRoot }, args);
+  return await runAsPackage({ specifier, version, cmdlessRoot }, args, signal);
 }
 
 // runs its `mcp` command. Unlike runAsRuntime, there's no Electron involved
@@ -193,9 +193,9 @@ export async function runAsMcp(meta: ImportMeta, packageName: string, version?: 
   return { address, dispose };
 }
 
-type CmdlessUIDispatcher = (parameters: types.Params, cmdlessRoot?: string) => Promise<string>;
-const runtimeDispatcher: CmdlessUIDispatcher = (parameters: types.Params, cmdlessRoot?: string) => {
-  return runAsRuntime(import.meta, CmdlessUI.toArgs(parameters), cmdlessRoot);
+type CmdlessUIDispatcher = (parameters: types.Params, cmdlessRoot?: string, signal?: AbortSignal) => Promise<string>;
+const runtimeDispatcher: CmdlessUIDispatcher = (parameters: types.Params, cmdlessRoot?: string, signal?: AbortSignal) => {
+  return runAsRuntime(import.meta, CmdlessUI.toArgs(parameters), cmdlessRoot, signal);
 };
 
 export class CmdlessUI {
@@ -204,8 +204,11 @@ export class CmdlessUI {
     private readonly cmdlessRoot?: string
   ) { }
 
-  async show(parameters: types.ShowParams) {
-    const output = await this.dispatch(parameters, this.cmdlessRoot);
+  // aborting the signal closes the window - when the window's process is
+  // the one showing it, so a window that's to be closed needs an app name of
+  // its own - and rejects with the signal's reason
+  async show(parameters: types.ShowParams, options: { signal?: AbortSignal } = {}) {
+    const output = await this.dispatch(parameters, this.cmdlessRoot, options.signal);
     return output;
   }
 
