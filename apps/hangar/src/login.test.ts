@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Agent, Session, Start } from '@ahpd/sdk';
-import { withCliLogin } from './login.js';
+import { withCliLogin, withLocalPages } from './login.js';
 import type { CliLogin } from './login.js';
 
 type Emitted = { channel: string; action: Record<string, unknown> };
@@ -101,4 +101,49 @@ test('a window closed without signing in cancels the CLI and fails the turn', as
   assert.equal(fake.wasCancelled(), true);
   assert.deepEqual(types(), ['chat/turnStarted', 'chat/inputRequested', 'chat/error']);
   assert.deepEqual(begun, []);
+});
+
+// an agent whose session raises whatever it's told to, and records answers
+function pageAgent() {
+  let emit!: Start['emit'];
+  const answered: string[] = [];
+  const agent = {
+    provider: 'pages', displayName: 'Pages',
+    create: (start: Start) => {
+      emit = start.emit;
+      return { answer: (requestId: string) => { answered.push(requestId); return true; } } as unknown as Session;
+    },
+  } as unknown as Agent;
+  return { agent, raise: (action: Record<string, unknown>) => emit('chat', action), answered };
+}
+
+function pages() {
+  const opened: { url: string; title: string; signal: AbortSignal }[] = [];
+  return { opened, open: async (url: string, title: string, signal: AbortSignal) => { opened.push({ url, title, signal }); } };
+}
+
+test('withLocalPages opens a page request titled with its message, and closes it when the agent completes it', async () => {
+  const { agent, raise } = pageAgent();
+  const { opened, open } = pages();
+  const forwarded: unknown[] = [];
+  withLocalPages(agent, open).create({ emit: (_: string, action: unknown) => forwarded.push(action) } as unknown as Start);
+  raise({ type: 'chat/inputRequested', request: { id: 'r1', url: 'https://example.com/device', message: 'Enter ABCD-1234' } });
+  assert.deepEqual(opened.map(({ url, title }) => ({ url, title })), [{ url: 'https://example.com/device', title: 'Enter ABCD-1234' }]);
+  assert.equal(opened[0].signal.aborted, false);
+  raise({ type: 'chat/inputCompleted', requestId: 'r1', response: 'accept' });
+  assert.equal(opened[0].signal.aborted, true);
+  assert.equal(forwarded.length, 2);
+});
+
+test('withLocalPages closes the page when someone answers, and leaves questions alone', async () => {
+  const { agent, raise, answered } = pageAgent();
+  const { opened, open } = pages();
+  const session = withLocalPages(agent, open).create({ emit: () => { } } as unknown as Start);
+  raise({ type: 'chat/inputRequested', request: { id: 'form', questions: [{ id: 'q' }], url: 'https://example.com' } });
+  assert.equal(opened.length, 0);
+  raise({ type: 'chat/inputRequested', request: { id: 'r1', url: 'https://example.com/device' } });
+  assert.equal(opened[0].title, 'Pages');
+  session.answer('r1', false, {}, 'cancel');
+  assert.equal(opened[0].signal.aborted, true);
+  assert.deepEqual(answered, ['r1']);
 });

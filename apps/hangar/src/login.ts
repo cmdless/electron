@@ -26,14 +26,24 @@ export type LoginRun = {
 
 // opens a sign-in page on this machine, and resolves with where it
 // redirected once it reaches `callback` - or nothing, if it was closed
-export type OpenSignIn = (url: string, callback: string) => Promise<string | undefined>;
+export type OpenSignIn = (url: string, callback: string, title: string) => Promise<string | undefined>;
 
-export const openWindow: OpenSignIn = async (url, callback) => {
+// sign-in windows leave the app name unset, so each is an app of its own -
+// one that can be closed, and whose data ui-runtime cleans up
+export const openWindow: OpenSignIn = async (url, callback, title) => {
   const redirectedTo = await new CmdlessUI().show({
-    kind: 'show', type: 'url', source: url, app: 'hangar-sign-in', width: 520, height: 720, redirect: callback,
+    kind: 'show', type: 'url', source: url, title, width: 520, height: 720, redirect: callback,
   });
   return redirectedTo.startsWith(callback) ? redirectedTo : undefined;
 };
+
+// opens a page an agent asked to have opened, on this machine, until the
+// signal says it's done with
+export type OpenPage = (url: string, title: string, signal: AbortSignal) => Promise<unknown>;
+
+export const openPage: OpenPage = (url, title, signal) => new CmdlessUI().show({
+  kind: 'show', type: 'url', source: url, title, width: 520, height: 720, external: true,
+}, { signal });
 
 // runs a CLI sign-in with BROWSER pointed at a script that writes down the
 // URL it was asked to open, rather than opening it
@@ -113,7 +123,7 @@ export function withCliLogin(agent: Agent, login: CliLogin, open: OpenSignIn = o
     try {
       const run = current = await login.start();
       onUrl(run.url);
-      void open(run.url, run.callback).then(async redirectedTo => {
+      void open(run.url, run.callback, login.title).then(async redirectedTo => {
         // the window's gone either way; a redirect is handed to the CLI's
         // own listener, which is what finishes the sign-in
         if (redirectedTo) await fetch(redirectedTo).catch(() => { });
@@ -181,6 +191,49 @@ export function withCliLogin(agent: Agent, login: CliLogin, open: OpenSignIn = o
           if (waiting?.turnId !== turnId) return inner.cancel(turnId);
           waiting = undefined;
           current?.cancel();
+        },
+      };
+    },
+  };
+}
+
+// An agent whose requests to open a page - an ACP agent's device-code
+// sign-in, say - open the page in a window on this machine, titled with what
+// the request says (the code to enter, for one). The window closes when the
+// agent says the request is done; closing it first leaves the request open,
+// for the chat's link or Cancel.
+export function withLocalPages(agent: Agent, open: OpenPage = openPage): Agent {
+  return {
+    ...agent,
+    create(start: Start): Session {
+      const windows = new Map<string, AbortController>();
+      const emit: Start['emit'] = (channel, action) => {
+        if (channel === 'chat' && action.type === 'chat/inputRequested') {
+          const request = action.request as { id: string; url?: string; message?: string; questions?: unknown[] };
+          if (request.url && !request.questions?.length && !windows.has(request.id)) {
+            const controller = new AbortController();
+            windows.set(request.id, controller);
+            void open(request.url, request.message ?? agent.displayName, controller.signal)
+              .catch(() => { })
+              .finally(() => { if (windows.get(request.id) === controller) windows.delete(request.id); });
+          }
+        } else if (channel === 'chat' && action.type === 'chat/inputCompleted') {
+          close(action.requestId as string);
+        }
+        start.emit(channel, action);
+      };
+      const close = (requestId: string) => {
+        const controller = windows.get(requestId);
+        windows.delete(requestId);
+        controller?.abort(new Error('the request is done'));
+      };
+      const session = agent.create({ ...start, emit });
+      // a person answering - cancelling, say - is done with the page too
+      return {
+        ...session,
+        answer(requestId, ...rest) {
+          close(requestId);
+          return session.answer(requestId, ...rest);
         },
       };
     },

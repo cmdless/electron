@@ -15,6 +15,11 @@ function pinPackage(spec: string, version: string) {
 }
 
 // what agent-acp needs to run an entry, or why it can't be run
+// the sign-in to ask registry agents for, where one goes over the protocol:
+// Codex's device code is a page to open and a code to enter, which it finishes
+// itself - and it signs in only when it isn't already
+const signIns: Record<string, string> = { 'codex-acp': 'chat-gpt-device-code' };
+
 export function resolveAgent(entry: AgentEntry, registry: Record<string, RegistryAgent>): AcpOptions | { error: string } {
   if (entry.kind === 'custom')
     return { provider: entry.id, displayName: entry.name, command: entry.command, args: entry.args, env: entry.env };
@@ -23,7 +28,11 @@ export function resolveAgent(entry: AgentEntry, registry: Record<string, Registr
   if (!agent) return { error: `${entry.registryId} isn't in the ACP registry (or the registry hasn't been fetched yet)` };
 
   const pin = (spec: string) => entry.version === 'latest' ? spec : pinPackage(spec, entry.version);
-  const base = { provider: entry.id, displayName: agent.name, description: agent.description };
+  const signIn = signIns[entry.registryId];
+  const base = {
+    provider: entry.id, displayName: agent.name, description: agent.description,
+    ...(signIn ? { authenticate: { methodId: signIn } } : {}),
+  };
   const { npx, uvx } = agent.distribution;
   if (npx) return { ...base, command: 'npx', args: ['-y', pin(npx.package), ...(npx.args ?? [])], env: npx.env };
   if (uvx) return { ...base, command: 'uvx', args: [pin(uvx.package), ...(uvx.args ?? [])], env: uvx.env };

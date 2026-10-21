@@ -22,7 +22,7 @@ import type { AgentsState, HangarService, RegistryAgent, RestartParams } from '@
 import { defaultAgents, resolveAgent, validEntry } from './agents.js';
 import { fetchRegistry } from './registry.js';
 import { codexTrustedProjects, trustedPath } from './trust.js';
-import { claudeLogin, withCliLogin } from './login.js';
+import { claudeLogin, withCliLogin, withLocalPages } from './login.js';
 
 const dataPath = getAppDataPath('hangar');
 
@@ -69,7 +69,12 @@ function createGeneration(resolved: ReturnType<typeof resolveAgents>): Generatio
     path: workspaces[0],
     // Claude and pi are built in; pi runs in this process, from ~/.pi/agent.
     // Claude signs its CLI in when a turn finds it signed out.
-    agents: [withCliLogin(claude({ paths: workspaces }), claudeLogin()), piAgent({}, workspaces), ...agents.map(acpAgent)],
+    // ACP agents' requests to open a page (a sign-in's) open here too.
+    agents: [
+      withCliLogin(claude({ paths: workspaces }), claudeLogin()),
+      piAgent({}, workspaces),
+      ...agents.map(options => withLocalPages(acpAgent(options))),
+    ],
     sessions: fileSessions({ dir: path.join(dataPath, 'sessions') }),
     usage: fileUsage({ folder: path.join(dataPath, 'usage') }),
     worktreesRoot: path.join(dataPath, 'worktrees'),

@@ -166,7 +166,8 @@ export function InputRequestPart({ part }: { part: InputRequestResponsePart }) {
   return (
     <Paper withBorder p="sm" radius="md" style={{ borderColor: 'var(--mantine-color-orange-filled)' }}>
       <Stack gap="xs">
-        {request.message && <Text size="sm" fw={500}>{request.message}</Text>}
+        {/* a page's message often carries what to enter there - a device code - so it reads larger */}
+        {request.message && <Text size={request.url && questions.length === 0 ? 'lg' : 'sm'} fw={500}>{request.message}</Text>}
         {request.url && <Anchor href={request.url} target="_blank" size="sm">Open {new URL(request.url).host} here</Anchor>}
         {questions.map(question => (
           <Question
