@@ -34,7 +34,8 @@
     "@cmdless/hangar-sdk": "*",
     "@cmdless/peerlink": "*",
     "@cmdless/peerlink-sdk": "*",
-    "@cmdless/rpc-sdk": "*"
+    "@cmdless/rpc-sdk": "*",
+    "@cmdless/ui-sdk": "*"
   },
   "exports": {
     "./daemon": "./dist/daemon.js"
