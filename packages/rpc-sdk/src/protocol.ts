@@ -32,47 +32,51 @@ export type RpcSide<
   notifications: N;
 };
 
+// any side, as a constraint: just objects of messages, so a merge of two
+// sides fits while generic. RpcRequests' index signature would let any name
+// through if a side had to be widened to it.
+export type AnySide = { requests: object; notifications: object };
 export type MergeSides<
-  A extends RpcSide,
-  B extends RpcSide
-> = RpcSide<
-  A['requests'] & B['requests'] & RpcRequests,
-  A['notifications'] & B['notifications'] & RpcNotifications
->;
-function mergeSides<A extends RpcSide, B extends RpcSide>(a: A, b: B): MergeSides<A, B> {
+  A extends AnySide,
+  B extends AnySide
+> = {
+  requests: A['requests'] & B['requests'];
+  notifications: A['notifications'] & B['notifications'];
+};
+function mergeSides<A extends AnySide, B extends AnySide>(a: A, b: B): MergeSides<A, B> {
   return {
     requests: { ...a.requests, ...b.requests },
     notifications: { ...a.notifications, ...b.notifications },
   };
 }
 
-export type RpcChannel<Outgoing extends RpcSide = RpcSide, Incoming extends RpcSide = RpcSide> = {
+export type RpcChannel<Outgoing extends AnySide = AnySide, Incoming extends AnySide = AnySide> = {
   outgoing: Outgoing;
   incoming: Incoming;
 };
-function channel<Outgoing extends RpcSide, Incoming extends RpcSide>(
+function channel<Outgoing extends AnySide, Incoming extends AnySide>(
   outgoing: Outgoing,
   incoming: Incoming
 ): RpcChannel<Outgoing, Incoming> {
   return { outgoing, incoming };
 }
 
-export type RequestSenders<R extends RpcSide['requests']> = {
+export type RequestSenders<R extends object> = {
   [K in keyof R]: [RequestParams<R[K]>] extends [void]
   ? () => Promise<RequestResult<R[K]>>
   : (params: RequestParams<R[K]>) => Promise<RequestResult<R[K]>>;
 };
-export type NotificationSenders<N extends RpcSide['notifications']> = {
+export type NotificationSenders<N extends object> = {
   [K in keyof N]: [NotificationParams<N[K]>] extends [void]
   ? () => void
   : (params: NotificationParams<N[K]>) => void;
 };
-export type RequestHandlers<R extends RpcSide['requests']> = {
+export type RequestHandlers<R extends object> = {
   [K in keyof R]: [RequestParams<R[K]>] extends [void]
   ? (handler: () => MaybePromise<RequestResult<R[K]>>) => Disposable
   : (handler: (params: RequestParams<R[K]>) => MaybePromise<RequestResult<R[K]>>) => Disposable;
 };
-export type NotificationHandlers<N extends RpcSide['notifications']> = {
+export type NotificationHandlers<N extends object> = {
   [K in keyof N]: [NotificationParams<N[K]>] extends [void]
   ? (handler: () => MaybePromise<void>) => Disposable
   : (handler: (params: NotificationParams<N[K]>) => MaybePromise<void>) => Disposable;
@@ -273,9 +277,11 @@ function protocol<Client extends RpcChannel, Server extends RpcChannel, States e
   };
 }
 
-function side<R extends RpcRequests, N extends RpcNotifications>(
+function side<R extends RpcRequests = {}, N extends RpcNotifications = {}>(
   value?: Partial<RpcSide<R, N>>
-): RpcSide<R, N> {
+  // inferred only from what's passed: the spec's context would otherwise
+  // infer a missing half as an index signature, letting any name through
+): RpcSide<NoInfer<R>, NoInfer<N>> {
   return {
     requests: value?.requests ?? {} as R,
     notifications: value?.notifications ?? {} as N,
@@ -285,6 +291,7 @@ function getSide<P extends RpcProtocolSpec, K extends keyof RpcProtocolSpec>(spe
   return (spec[key] ?? side()) as SideOf<P, K>;
 }
 function request(method: string): RpcRequest<void, void>;
+function request<P>(method: string): RpcRequest<P, void>;
 function request<P, R>(method: string): RpcRequest<P, R>;
 function request<P, R>(method: string): RpcRequest<P, R> {
   return { type: new RequestType<P, R, unknown>(method) };
@@ -305,14 +312,14 @@ export type RpcProtocolSpec = Partial<{
   // change breaks clients
   name: string;
   version: number;
-  clientToServer: RpcSide;
-  serverToClient: RpcSide;
-  eitherToEither: RpcSide;
+  clientToServer: AnySide;
+  serverToClient: AnySide;
+  eitherToEither: AnySide;
   state: RpcStates;
 }>;
 export type StatesOf<P> = P extends { state: infer C extends RpcStates } ? C : {};
-export type EmptySide = RpcSide<RpcRequests, RpcNotifications>;
-export type SideOf<P, K extends keyof RpcProtocolSpec> = K extends keyof P ? P[K] extends RpcSide ? P[K] : EmptySide : EmptySide;
+export type EmptySide = RpcSide<{}, {}>;
+export type SideOf<P, K extends keyof RpcProtocolSpec> = K extends keyof P ? P[K] extends AnySide ? P[K] : EmptySide : EmptySide;
 export type Protocol<P extends RpcProtocolSpec> =
   RpcProtocol<
     RpcChannel<

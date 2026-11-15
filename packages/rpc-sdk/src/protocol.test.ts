@@ -26,6 +26,28 @@ test('a request round-trips with the correct params and result types', async () 
   assert.deepEqual(result, { text: 'HELLO' });
 });
 
+test('peers only offer the messages their protocol declares', () => {
+  const protocol = defineProtocol(({ side, request, notification }) => ({
+    clientToServer: side({ requests: { ping: request('ping') } }),
+    eitherToEither: side({ notifications: { bye: notification('bye') } }),
+  }));
+  const { clientConn, serverConn } = createLoopbackPair();
+  const client = protocol.createClient(clientConn);
+  const server = protocol.createServer(serverConn);
+  void client.request.ping;
+  void client.notify.bye;
+  void server.onRequest.ping;
+  void server.notify.bye;
+  // @ts-expect-error - no such request
+  void client.request.pong;
+  // @ts-expect-error - ping goes the other way
+  void server.request.ping;
+  // @ts-expect-error - no such notification, and this side declared none
+  void client.notify.hello;
+  // @ts-expect-error - serverToClient wasn't declared at all
+  void server.request.anything;
+});
+
 test('a notification flows from client to server', async () => {
   const protocol = defineProtocol(({ side, notification }) => ({
     clientToServer: side({
