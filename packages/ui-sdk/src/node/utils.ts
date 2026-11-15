@@ -10,7 +10,7 @@ import { startWebSocket, closeWebSocketServer, getWebSocketUrl } from '@cmdless/
 import { startSocket, connectSocket } from '@cmdless/rpc-sdk/node';
 import {
   execProcess, findLocalBinPath, forwardSignals, getCmdlessRoot, getMetaPackageVersion, getTmpSocketPath,
-  packageEnv, resolvePackageBin, runAsPackage,
+  packageEnv, resolvePackageBin, runAsPackage, waitForService,
 } from '@cmdless/core/node';
 import type { McpHandle } from './app.js';
 
@@ -23,6 +23,8 @@ export function getEphemeralPrefix() {
 }
 
 export { getTmpSocketPath, getCmdlessRoot, setCmdlessRoot } from '@cmdless/core/node';
+// what ui-runtime's host reports and forwards with
+export { listenOnce, sendTo, resolveService, rejectService } from '@cmdless/core/node';
 // the package helpers live in core now; these keep ui-sdk's own exports working
 export {
   ensurePackage, findLocalBinPath, getInstallPath, getLatestPackageVersion, getMetaPackageVersion, getPackageName,
@@ -135,6 +137,19 @@ export function getCmdlessApp() {
 
 export function setCmdlessApp(app: string, env: NodeJS.ProcessEnv = process.env) {
   setEnv(APP_KEY, app, env);
+  return app;
+}
+
+export function resolveCmdlessApp() {
+  return setCmdlessApp(getCmdlessApp() || `${getEphemeralPrefix()}${crypto.randomUUID()}`);
+}
+
+export function getCmdlessUIVersion(meta: ImportMeta = import.meta) {
+  return getMetaPackageVersion('@cmdless/ui-sdk', meta);
+}
+
+export function isEphemeralCmdlessApp(appName: string) {
+  return appName.startsWith(getEphemeralPrefix());
 }
 
 // a dev server's URL, which createShowCommand shows instead of params()'s
@@ -161,8 +176,27 @@ export async function runAsRuntime(meta: ImportMeta, args: string[] = [], cmdles
     const root = cmdlessRoot ?? getCmdlessRoot();
     return execProcess(process.execPath, [binPath, ...args], packageEnv(root), signal);
   }
-  const version = await getMetaPackageVersion('@cmdless/ui-sdk', meta);
+  const version = await getCmdlessUIVersion(meta);
   return await runAsPackage({ specifier, version, cmdlessRoot }, args, signal);
+}
+
+export type RunAsHostOptions = {
+  app?: string;
+  cmdlessRoot?: string;
+  timeoutMs?: number;
+};
+
+// starts ui-runtime's host, detached, and waits for it to report where it
+// can be reached (resolveService): its own address when it gets the app's
+// single-instance lock, or the lock holder's when it doesn't. Everything it
+// needs goes through its env - the app (CMDLESS_APP), the root
+// (CMDLESS_ROOT) and where to report (CMDLESS_SERVICE_SOCKET).
+export async function runAsHost<T>(meta: ImportMeta, { app, cmdlessRoot, timeoutMs }: RunAsHostOptions = {}) {
+  const specifier = '@cmdless/ui-runtime';
+  const version = await getCmdlessUIVersion(meta);
+  const { binPath, env } = await resolvePackageBin(meta, specifier, version, cmdlessRoot);
+  if (app) setCmdlessApp(app, env);
+  return waitForService<T>(process.execPath, [binPath, 'host'], { env, timeoutMs });
 }
 
 // runs its `mcp` command. Unlike runAsRuntime, there's no Electron involved
