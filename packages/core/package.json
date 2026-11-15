@@ -35,8 +35,5 @@
     "prebuild": "rimraf dist node_modules/.tmp",
     "build": "tsc -b",
     "test": "node ../../scripts/run-tests.mjs"
-  },
-  "dependencies": {
-    "@lickle/lock": "0.0.1"
   }
 }
