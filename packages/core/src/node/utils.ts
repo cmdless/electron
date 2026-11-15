@@ -41,13 +41,13 @@ export function getTmpSocketPath(name: string) {
   return path.join(os.tmpdir(), `${hash}.sock`);
 }
 
-type ServiceMessage<T> =
+export type ServiceMessage<T> =
   | { type: 'resolve'; value: T }
   | { type: 'reject'; error: string };
 
-// sends one newline-delimited JSON message and waits for the other side to
-// see it before tearing the socket down.
-function sendOnce(socketPath: string, message: ServiceMessage<unknown>) {
+// sends one newline-delimited JSON message to a socket listenOnce handed
+// out, and waits for the other side to see it before tearing the socket down
+export function sendTo<T>(socketPath: string, message: ServiceMessage<T>) {
   return new Promise<void>((resolve, reject) => {
     const socket = net.createConnection(socketPath, () => socket.end(JSON.stringify(message) + '\n'));
     socket.once('error', reject);
@@ -71,6 +71,35 @@ function receiveOnce<T>(socket: net.Socket) {
   });
 }
 
+// listens on a fresh temporary socket for one message: the first one
+// settles it (a reject message rejects it), a sender that hangs up without
+// sending rejects it, and so does the timeout (0 waits forever). The socket
+// closes once it's settled. `socketPath` is what's handed to the sender.
+export async function listenOnce<T>(timeoutMs = 30_000) {
+  const socketPath = getTmpSocketPath(`cmdless-once-${crypto.randomUUID()}`);
+  let settle!: { resolve: (value: T) => void; reject: (error: unknown) => void };
+  const message = new Promise<T>((resolve, reject) => settle = { resolve, reject });
+
+  const server = net.createServer(socket => {
+    receiveOnce<T>(socket).then(received => {
+      if (received.type === 'resolve') settle.resolve(received.value);
+      else settle.reject(new Error(received.error));
+    }, settle.reject);
+    socket.once('close', () => settle.reject(new Error('the sender hung up without sending')));
+  });
+  await listenOn(server, socketPath);
+
+  const timer = timeoutMs > 0
+    ? setTimeout(() => settle.reject(new Error(`nothing arrived within ${timeoutMs}ms`)), timeoutMs)
+    : undefined;
+  void message.catch(() => { }).finally(() => {
+    clearTimeout(timer);
+    server.close();
+  });
+
+  return { socketPath, message, close: (reason?: unknown) => settle.reject(reason ?? new Error('stopped listening')) };
+}
+
 export type WaitForServiceOptions = Omit<SpawnOptions, 'detached'> & {
   // how long to wait for resolveService before giving up; 0 waits forever
   timeoutMs?: number;
@@ -88,51 +117,34 @@ export async function waitForService<T>(
   options: WaitForServiceOptions = {},
 ): Promise<{ child: ChildProcess; value: T }> {
   const { timeoutMs = 30_000, ...spawnOptions } = options;
-  const socketPath = getTmpSocketPath(`cmdless-service-${crypto.randomUUID()}`);
-
-  let received!: (message: ServiceMessage<T>) => void;
-  const message = new Promise<ServiceMessage<T>>(resolve => received = resolve);
-  const server = net.createServer(socket => {
-    receiveOnce<T>(socket).then(received, error => received({ type: 'reject', error: String(error) }));
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(socketPath, () => {
-      server.off('error', reject);
-      resolve();
-    });
-  });
+  const once = await listenOnce<T>(timeoutMs);
 
   const child = spawn(command, args, {
     stdio: 'ignore',
     windowsHide: true,
     ...spawnOptions,
     detached: true,
-    env: { ...(spawnOptions.env ?? process.env), [SERVICE_SOCKET_KEY]: socketPath },
+    env: { ...(spawnOptions.env ?? process.env), [SERVICE_SOCKET_KEY]: once.socketPath },
   });
 
-  let timer: NodeJS.Timeout | undefined;
-  const failures = new Promise<never>((_, reject) => {
+  const failed = new Promise<never>((_, reject) => {
     child.once('error', reject);
     child.once('exit', (code, signal) =>
       reject(new Error(`${command} exited (${signal ?? code}) before resolving as a service`)));
-    if (timeoutMs > 0)
-      timer = setTimeout(() => reject(new Error(`${command} did not resolve as a service within ${timeoutMs}ms`)), timeoutMs);
   });
 
   try {
-    const result = await Promise.race([message, failures]);
-    if (result.type === 'reject') throw new Error(result.error);
+    const value = await Promise.race([once.message, failed]);
     child.removeAllListeners('exit');
     child.removeAllListeners('error');
     child.unref();
-    return { child, value: result.value };
+    return { child, value };
   } catch (error) {
+    once.close(error);
     if (child.exitCode === null && child.signalCode === null) child.kill();
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    server.close();
+    throw error instanceof Error && error.message.startsWith('nothing arrived')
+      ? new Error(`${command} did not resolve as a service within ${timeoutMs}ms`)
+      : error;
   }
 }
 
@@ -149,14 +161,14 @@ function takeServiceSocket() {
 // waiting, completing the loop. Throws when this process wasn't started by
 // waitForService.
 export function resolveService<T>(value: T) {
-  return sendOnce(takeServiceSocket(), { type: 'resolve', value });
+  return sendTo(takeServiceSocket(), { type: 'resolve', value });
 }
 
 // reports a startup failure back to whoever is waiting, instead of leaving
 // them to time out.
 export function rejectService(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
-  return sendOnce(takeServiceSocket(), { type: 'reject', error: message });
+  return sendTo(takeServiceSocket(), { type: 'reject', error: message });
 }
 
 // true when this process was started by waitForService and hasn't reported yet

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { getTmpSocketPath, listenExclusive, resolveService, waitForService } from './utils.js';
+import { getTmpSocketPath, listenExclusive, listenOnce, resolveService, sendTo, waitForService } from './utils.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'service.fixture.ts');
 const run = (...args: string[]): [string, string[]] => [process.execPath, ['--import', 'tsx', fixture, ...args]];
@@ -67,4 +67,24 @@ test('listenExclusive replaces a socket nothing listens on', { skip: process.pla
   } finally {
     server.close();
   }
+});
+
+test('listenOnce resolves with the first message sent to it, then stops listening', async () => {
+  const once = await listenOnce<{ address: string }>();
+  await sendTo(once.socketPath, { type: 'resolve', value: { address: 'here' } });
+  assert.deepEqual(await once.message, { address: 'here' });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  await assert.rejects(sendTo(once.socketPath, { type: 'resolve', value: { address: 'again' } }));
+});
+
+test('listenOnce rejects with a reject message, a hang-up, or the timeout', async () => {
+  const rejected = await listenOnce();
+  await sendTo(rejected.socketPath, { type: 'reject', error: 'no lock' });
+  await assert.rejects(rejected.message, /no lock/);
+
+  const hungUp = await listenOnce();
+  await new Promise<void>(resolve => { const socket = net.createConnection(hungUp.socketPath, () => { socket.end(); resolve(); }); });
+  await assert.rejects(hungUp.message, /hung up/);
+
+  await assert.rejects((await listenOnce(1)).message, /nothing arrived within 1ms/);
 });
