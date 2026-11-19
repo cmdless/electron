@@ -1,5 +1,6 @@
 {
-  "name": "@cmdless/agent-runner",
+  "name": "@cmdless/gh-approvals",
+  "description": "GitHub approvals, from the tray.",
   "version": "0.0.1",
   "license": "MIT",
   "type": "module",
@@ -12,8 +13,13 @@
     "url": "git+https://github.com/cmdless/electron.git"
   },
   "bin": {
-    "agent-runner": "./out/node/bin.js"
+    "gh-approvals": "./out/node/bin.js"
   },
+  "files": [
+    "out/",
+    "dist/",
+    "assets/"
+  ],
   "scripts": {
     "dev": "vite",
     "prebuild": "rimraf out dist node_modules/.tmp",
@@ -22,7 +28,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.5.1",
     "@cmdless/rpc-sdk": "*",
     "@cmdless/ui-sdk": "*",
     "react": "^19.2.8",

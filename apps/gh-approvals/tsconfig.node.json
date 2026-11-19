@@ -6,5 +6,5 @@
     "outDir": "./out",
     "types": ["node"]
   },
-  "include": ["src/node", "src/shared"]
+  "include": ["src/node"]
 }

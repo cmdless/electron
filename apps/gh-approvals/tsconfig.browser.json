@@ -22,5 +22,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src/browser", "src/shared"]
+  "include": ["src/browser"]
 }

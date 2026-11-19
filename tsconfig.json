@@ -20,7 +20,7 @@
       "path": "./apps/ui-runtime"
     },
     {
-      "path": "./apps/agent-runner"
+      "path": "./apps/gh-approvals"
     },
     {
       "path": "./apps/peerlink"
