@@ -2,6 +2,7 @@ import '@cmdless/ui-sdk/browser' // installs window.cmdless's global type augmen
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
+import './index.css'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

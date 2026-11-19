@@ -1,4 +1,4 @@
-import { cmdlessIPC, cmdlessViewIPC, createElectronIPC, createElectronViewIPC } from '@cmdless/ui-sdk';
+import { BACKEND_ARG, cmdlessIPC, cmdlessViewIPC, createElectronIPC, createElectronViewIPC } from '@cmdless/ui-sdk';
 import type { Cmdless, CmdlessSocket } from '@cmdless/ui-sdk';
 import { contextBridge, ipcRenderer } from 'electron';
 
@@ -39,12 +39,20 @@ async function connect(): Promise<CmdlessSocket> {
   };
 }
 
+ipc.listen();
+view.listen();
+
+// the host says at start whether the window has a backend, so the page can
+// tell without asking - and the connection is underway before it does
+const backend = process.argv.includes(BACKEND_ARG) ? connect() : undefined;
+// a page that never takes it up isn't left with an unhandled failure here
+backend?.catch(() => { });
+
 const cmdless: Cmdless = {
   resolve: (value, exitCode) => ipc.notify.resolve({ value, exitCode }),
+  backend,
   connect,
   view,
 };
 
 contextBridge.exposeInMainWorld('cmdless', cmdless);
-ipc.listen();
-view.listen();

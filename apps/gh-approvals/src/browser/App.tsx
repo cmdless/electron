@@ -1,3 +1,8 @@
+import LogViewer from './LogViewer';
+
+// the page the tray opens, by the route after the # in its URL
 export default function App() {
-  return <h1>gh-approvals</h1>
+  const route = window.location.hash.replace(/^#/, '');
+  if (route === '/log') return <LogViewer />;
+  return <p>Nothing here: {route || '/'}</p>;
 }

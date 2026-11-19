@@ -59,9 +59,9 @@ async function main() {
       await setStatus(key, { status: 'signing-in' });
       try {
         const attempt = startSignIn(provider);
-        const redirectedTo = await UIHost.showWindow<string | undefined>({ app: 'cmdless-auth' }, {
+        const redirectedTo = await UIHost.showWindow<string | undefined>({
           type: 'url', source: attempt.url, window: { width: 520, height: 720 }, redirect: provider.redirectUri,
-        });
+        }, { app: 'cmdless-auth' });
         // the window ends with nothing when it's closed instead
         if (!redirectedTo?.startsWith(provider.redirectUri)) throw new Error('sign-in cancelled');
         const code = codeFrom(redirectedTo, attempt.state);

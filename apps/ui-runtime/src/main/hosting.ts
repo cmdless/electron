@@ -1,13 +1,13 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, clipboard, dialog, screen, shell, BrowserWindow, Menu, nativeImage, Notification, Tray } from 'electron';
-import { cmdlessIPC, cmdlessViewIPC, createElectronIPC, createElectronViewIPC } from '@cmdless/ui-sdk';
+import { BACKEND_ARG, cmdlessIPC, cmdlessViewIPC, createElectronIPC, createElectronViewIPC } from '@cmdless/ui-sdk';
 import type { types, ViewProps } from '@cmdless/ui-sdk';
 import { getCmdlessUIVersion, getTmpSocketPath, UIHost } from '@cmdless/ui-sdk/node';
 import type {
   CardParams, CardUpdateParams, FormParams, ViewWindowParams, WindowConnectParams, WindowOptions,
   DialogParams, HandleClosedParams, HandleParams, HostService, InitializeResult, NotificationParams, TrayEvent,
-  TrayMenuItem, TrayParams, UIServer, WindowParams,
+  TrayMenuItem, TrayParams, UIServer, WindowOpenParams,
 } from '@cmdless/ui-sdk/node';
 import { asElectronIPC } from '@cmdless/rpc-sdk';
 import { startSocket } from '@cmdless/rpc-sdk/node';
@@ -49,7 +49,7 @@ export abstract class UIHandle {
   }
 
   // opens a window in front of this one, for the same UIHost
-  openWindow(params: Omit<WindowParams, 'parent'>) {
+  openWindow(params: Omit<WindowOpenParams, 'parent'>) {
     return new WindowHandle(this.owner, params, this.parent);
   }
 
@@ -79,6 +79,15 @@ export abstract class UIHandle {
 
   // what ending it means for this kind: closing the window, say
   protected abstract close(): void;
+
+  // brings its window to the front, if it has one
+  focus() {
+    const win = this.parent;
+    if (!win || win.isDestroyed()) return;
+    if (win.isMinimized()) win.restore();
+    bringUp(win);
+    win.focus();
+  }
 }
 
 // this process is the host; each UIHost connected to it is served through
@@ -127,13 +136,14 @@ export class ServerHandle {
 // and the size that suits what it shows: it ends its handle when it's closed
 // by hand (with no value), comes to the front once it has something to show
 // (unless whoever made it shows it themselves), and keeps a title that was
-// asked for whatever its page calls itself
+// asked for whatever its page calls itself. A page gets the preload unless
+// it's a third party's - with what it's told at start (argv) when it does.
 function createWindow(
   handle: UIHandle,
   { width, height, title }: WindowOptions = {},
   defaults: { width: number; height: number },
   parent: BrowserWindow | undefined,
-  preload: boolean,
+  preload: false | string[],
   showWhenReady = true,
 ) {
   const win = new BrowserWindow({
@@ -145,6 +155,7 @@ function createWindow(
     title: title ?? app.getName(),
     webPreferences: {
       preload: preload ? preloadPath : undefined,
+      additionalArguments: preload || undefined,
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -178,14 +189,16 @@ function browserUserAgent() {
 export class WindowHandle extends UIHandle {
   readonly window: BrowserWindow;
 
-  constructor(owner: ServerHandle, parameters: Omit<WindowParams, 'parent'>, parent?: BrowserWindow) {
+  constructor(owner: ServerHandle, parameters: Omit<WindowOpenParams, 'parent'>, parent?: BrowserWindow) {
     super(owner);
-    const { type, source, redirect, window } = parameters;
+    const { type, source, redirect, window, backend } = parameters;
     // a third party's pages: a redirect window's, or ones said to be external
     const external = redirect !== undefined || parameters.external === true;
 
-    // a third party's pages (a sign-in, say) get no window.cmdless
-    const win = this.window = createWindow(this, window, { width: 900, height: 670 }, parent, !external);
+    // a third party's pages (a sign-in, say) get no window.cmdless; the
+    // preload hears whether there's a backend for it to connect to
+    const preload = external ? false : backend ? [BACKEND_ARG] : [];
+    const win = this.window = createWindow(this, window, { width: 900, height: 670 }, parent, preload);
 
     // navigating to the redirect prefix ends the window with that URL, before
     // it's ever requested - a provider's HTTP redirect is will-redirect, a
@@ -226,7 +239,10 @@ export class WindowHandle extends UIHandle {
       const ipc = cmdlessIPC.createServer(createElectronIPC(asElectronIPC(win.webContents.ipc, win.webContents)));
       ipc.onNotification.resolve(({ value, exitCode = 0 }) =>
         exitCode === 0 ? this.dispose(value) : this.dispose(undefined, `the window exited with code ${exitCode}`));
-      ipc.onRequest.connect(() => owner.windowConnect({ id: this.id }));
+      ipc.onRequest.connect(() => {
+        if (!backend) throw new Error('this window was opened without a backend');
+        return owner.windowConnect({ backend });
+      });
       ipc.listen();
     }
 
@@ -258,7 +274,7 @@ abstract class ViewHandle extends UIHandle {
     // asked for - shown once it's sized, so it never jumps - and stops once
     // the window's been resized by hand
     let fitting = window?.height === undefined;
-    const win = this.window = createWindow(this, window, { width: 520, height: 640 }, parent, true, !fitting);
+    const win = this.window = createWindow(this, window, { width: 520, height: 640 }, parent, [], !fitting);
     win.on('will-resize', () => { fitting = false; });
 
     win.webContents.setWindowOpenHandler(({ url }) => {
@@ -341,8 +357,8 @@ export class DialogHandle extends UIHandle {
 
   constructor(owner: ServerHandle, params: Omit<DialogParams, 'parent'>, parent?: BrowserWindow) {
     super(owner);
-    const { type, message, detail, buttons, defaultId, cancelId } = params;
-    const options = { type, message, detail, buttons, defaultId, cancelId, signal: this.dismissed.signal };
+    const { type, message, detail, buttons, defaultId, cancelId, checkboxLabel, checkboxChecked } = params;
+    const options = { type, message, detail, buttons, defaultId, cancelId, checkboxLabel, checkboxChecked, signal: this.dismissed.signal };
     // with no Dock icon until now, the app isn't the active one - without
     // this, a dialog with no window to sit on opens behind whatever is
     if (!parent) app.focus({ steal: true });
@@ -570,6 +586,12 @@ export class Host {
           const found = initialized().handles.get(id);
           if (!found) throw new Error(`no handle ${id}`);
           found.dispose(value);
+        });
+
+        server.onRequest.handleFocus(({ id }) => {
+          const found = initialized().handles.get(id);
+          if (!found) throw new Error(`no handle ${id}`);
+          found.focus();
         });
       },
     })();
