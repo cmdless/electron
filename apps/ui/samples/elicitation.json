@@ -1,0 +1,23 @@
+{
+  "message": "Which repository should I open a pull request against, and how should it be set up?",
+  "requestedSchema": {
+    "type": "object",
+    "properties": {
+      "repository": { "type": "string", "title": "Repository", "description": "owner/name", "minLength": 3 },
+      "base": { "type": "string", "title": "Base branch", "default": "main" },
+      "reviewers": { "type": "integer", "title": "Reviewers to request", "minimum": 0, "maximum": 5, "default": 1 },
+      "draft": { "type": "boolean", "title": "Open as a draft", "default": true },
+      "merge": {
+        "type": "string", "title": "Merge method",
+        "oneOf": [ { "const": "merge", "title": "Merge commit" }, { "const": "squash", "title": "Squash" }, { "const": "rebase", "title": "Rebase" } ]
+      },
+      "labels": {
+        "type": "array", "title": "Labels",
+        "items": { "type": "string", "enum": ["bug", "feature", "docs", "chore"] }
+      },
+      "contact": { "type": "string", "title": "Who to notify", "format": "email" },
+      "priority": { "type": "string", "title": "Priority", "enum": ["p0", "p1", "p2"], "enumNames": ["Urgent", "Soon", "Whenever"] }
+    },
+    "required": ["repository", "merge"]
+  }
+}

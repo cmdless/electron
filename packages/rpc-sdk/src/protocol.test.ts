@@ -26,6 +26,28 @@ test('a request round-trips with the correct params and result types', async () 
   assert.deepEqual(result, { text: 'HELLO' });
 });
 
+test('peers only offer the messages their protocol declares', () => {
+  const protocol = defineProtocol(({ side, request, notification }) => ({
+    clientToServer: side({ requests: { ping: request('ping') } }),
+    eitherToEither: side({ notifications: { bye: notification('bye') } }),
+  }));
+  const { clientConn, serverConn } = createLoopbackPair();
+  const client = protocol.createClient(clientConn);
+  const server = protocol.createServer(serverConn);
+  void client.request.ping;
+  void client.notify.bye;
+  void server.onRequest.ping;
+  void server.notify.bye;
+  // @ts-expect-error - no such request
+  void client.request.pong;
+  // @ts-expect-error - ping goes the other way
+  void server.request.ping;
+  // @ts-expect-error - no such notification, and this side declared none
+  void client.notify.hello;
+  // @ts-expect-error - serverToClient wasn't declared at all
+  void server.request.anything;
+});
+
 test('a notification flows from client to server', async () => {
   const protocol = defineProtocol(({ side, notification }) => ({
     clientToServer: side({
@@ -228,5 +250,23 @@ test('checkVersion fails loudly on a different version, or a server too old to s
     const client = define(2).createClient(clientConn);
     client.listen();
     await assert.rejects(client.checkVersion(), message);
+  }
+});
+
+test('accept turns each connection into a configured server peer', async () => {
+  const protocol = defineProtocol(({ side, request }) => ({
+    clientToServer: side({ requests: { ping: request<{ text: string }, { text: string }>('ping') } }),
+  }));
+  const { clientConn, serverConn } = createLoopbackPair();
+  const accept = protocol.accept(server => server.onRequest.ping(({ text }) => ({ text: text.toUpperCase() })));
+  const server = accept(serverConn);
+  const client = protocol.createClient(clientConn);
+  server.listen();
+  client.listen();
+  try {
+    assert.deepEqual(await client.request.ping({ text: 'hi' }), { text: 'HI' });
+  } finally {
+    client.dispose();
+    server.dispose();
   }
 });

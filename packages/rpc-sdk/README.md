@@ -85,6 +85,12 @@ const { accept } = await createPingHost();
 await startWebSocket({ accept, options: { port: 8080 } });
 ```
 
+When there's no host to start - the connections come from elsewhere, and any store is already made - `protocol.accept(configure, store?)` is that `accept` on its own: each connection becomes a server peer set up by `configure`, ready to listen.
+
+```ts
+const accept = protocol.accept(server => server.onRequest.ping(async ({ text }) => ({ text: text.toUpperCase() })));
+```
+
 ## State channels
 
 A protocol can declare named pieces of server-owned state beside its sides. Clients subscribe to a channel, get its current state, and are kept up to date with [JSON Patch](https://datatracker.ietf.org/doc/html/rfc6902) deltas:

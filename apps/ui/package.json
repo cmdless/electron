@@ -1,7 +1,7 @@
 {
   "name": "@cmdless/ui",
-  "description": "Runtime that wraps Electron convenience UI.",
-  "version": "0.0.4",
+  "description": "One-shot commands for cmdless UI: show a window or a dialog, and print what it ended with.",
+  "version": "0.0.5",
   "license": "MIT",
   "type": "module",
   "author": {

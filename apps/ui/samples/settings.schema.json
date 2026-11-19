@@ -1,0 +1,23 @@
+{
+  "title": "Tray settings",
+  "type": "object",
+  "required": ["user", "interval"],
+  "properties": {
+    "user": { "type": "string", "title": "GitHub login", "minLength": 1 },
+    "interval": { "type": "integer", "title": "Check every (minutes)", "minimum": 1, "maximum": 60, "default": 2 },
+    "sources": {
+      "type": "array", "title": "Look for",
+      "items": { "type": "string", "enum": ["pull-requests", "deployments"] },
+      "uniqueItems": true
+    },
+    "comment": { "type": "string", "title": "Approval comment", "default": "Approved" },
+    "notify": { "type": "boolean", "title": "Notify me about new requests", "default": true },
+    "quietHours": {
+      "type": "object", "title": "Quiet hours",
+      "properties": {
+        "from": { "type": "string", "format": "time", "title": "From" },
+        "to": { "type": "string", "format": "time", "title": "To" }
+      }
+    }
+  }
+}

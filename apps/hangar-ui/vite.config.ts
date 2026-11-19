@@ -51,6 +51,9 @@ function cmdless(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // the built page is opened as a file, so its assets are found beside it
+  // rather than at the root of the disk
+  base: './',
   // don't let vite wipe the terminal - the spawned bin's inherited stdio
   // (and anything electron/ensure-electron prints) would get cleared with it.
   clearScreen: false,

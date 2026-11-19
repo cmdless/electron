@@ -143,7 +143,7 @@ export async function runAsPackage(parameters: PackageInstallParams, args: strin
 }
 
 // resolves `packageName`'s bin locally first (via findLocalBinPath), falling
-// back to ensurePackage's cache - the same way ui-sdk's runAsRuntime does.
+// back to ensurePackage's cache.
 export async function resolvePackageBin(meta: ImportMeta, packageName: string, version?: string, cmdlessRoot?: string) {
   const localBinPath = findLocalBinPath(packageName, meta);
   if (localBinPath) return { binPath: localBinPath, env: packageEnv(cmdlessRoot) };

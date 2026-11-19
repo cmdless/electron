@@ -1,0 +1,44 @@
+/* the page is the card or form, edge to edge */
+html, body { margin: 0; background: var(--mantine-color-body); }
+
+/* Adaptive Cards' own controls, in Mantine's look */
+.card .ac-adaptiveCard { padding: 16px !important; }
+.card .ac-input,
+.card .ac-multichoiceInput {
+  font: inherit; font-size: var(--mantine-font-size-sm);
+  color: var(--mantine-color-text);
+  background: var(--mantine-color-body);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+  padding: 6px 10px; box-sizing: border-box;
+}
+.card .ac-input:focus { outline: none; border-color: var(--mantine-primary-color-filled); }
+.card .ac-pushButton {
+  font: inherit; font-size: var(--mantine-font-size-sm); font-weight: 600;
+  height: 36px; padding: 0 18px; cursor: pointer;
+  color: var(--mantine-color-default-color);
+  background: var(--mantine-color-default);
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-sm);
+}
+.card .ac-pushButton:hover { background: var(--mantine-color-default-hover); }
+.card .ac-pushButton.style-positive,
+.card .ac-pushButton:first-child:not(.style-destructive) {
+  color: var(--mantine-color-white);
+  background: var(--mantine-primary-color-filled);
+  border-color: transparent;
+}
+.card .ac-pushButton.style-destructive {
+  color: var(--mantine-color-white); background: var(--mantine-color-red-filled); border-color: transparent;
+}
+.card .ac-pushButton.expanded { outline: 2px solid var(--mantine-primary-color-filled); }
+
+/* Markdown in card text: no stray paragraph margins, links in the accent */
+.card .ac-textBlock p { margin: 0; }
+.card .ac-textBlock p + p { margin-top: 0.5em; }
+.card .ac-textBlock a { color: var(--mantine-color-anchor); }
+.card .ac-textBlock ul, .card .ac-textBlock ol { margin: 0.25em 0; padding-left: 1.25em; }
+
+/* a JSON Schema form inside a card: Mantine's own look, at the card's text size */
+.card .ac-jsonSchemaInput { font-size: var(--mantine-font-size-sm); }
+.card .ac-jsonSchemaInput.ac-input-validation-failed { outline: none; }

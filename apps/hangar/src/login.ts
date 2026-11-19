@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import type { Agent, Session, Start } from '@ahpd/sdk';
-import { CmdlessUI } from '@cmdless/ui-sdk/node';
+import { UIHost } from '@cmdless/ui-sdk/node';
 
 // an agent CLI's own sign-in: whether it's signed in, and a sign-in that
 // hands back the URL to open and finishes once the browser reaches its
@@ -28,22 +28,35 @@ export type LoginRun = {
 // redirected once it reaches `callback` - or nothing, if it was closed
 export type OpenSignIn = (url: string, callback: string, title: string) => Promise<string | undefined>;
 
-// sign-in windows leave the app name unset, so each is an app of its own -
-// one that can be closed, and whose data ui-runtime cleans up
+// sign-in windows leave the app name unset, so each gets a host of its own -
+// one that can be closed, and whose data is cleaned up after it
 export const openWindow: OpenSignIn = async (url, callback, title) => {
-  const redirectedTo = await new CmdlessUI().show({
-    kind: 'show', type: 'url', source: url, title, width: 520, height: 720, redirect: callback,
+  const redirectedTo = await UIHost.showWindow<string | undefined>({}, {
+    type: 'url', source: url, window: { title, width: 520, height: 720 }, redirect: callback,
   });
-  return redirectedTo.startsWith(callback) ? redirectedTo : undefined;
+  return redirectedTo?.startsWith(callback) ? redirectedTo : undefined;
 };
 
 // opens a page an agent asked to have opened, on this machine, until the
 // signal says it's done with
 export type OpenPage = (url: string, title: string, signal: AbortSignal) => Promise<unknown>;
 
-export const openPage: OpenPage = (url, title, signal) => new CmdlessUI().show({
-  kind: 'show', type: 'url', source: url, title, width: 520, height: 720, external: true,
-}, { signal });
+export const openPage: OpenPage = async (url, title, signal) => {
+  const host = await UIHost.create();
+  try {
+    const page = await host.openWindow({ type: 'url', source: url, window: { title, width: 520, height: 720 }, external: true });
+    const close = () => void page.close().catch(() => { });
+    if (signal.aborted) close();
+    signal.addEventListener('abort', close, { once: true });
+    try {
+      return await page.closed;
+    } finally {
+      signal.removeEventListener('abort', close);
+    }
+  } finally {
+    host.dispose();
+  }
+};
 
 // runs a CLI sign-in with BROWSER pointed at a script that writes down the
 // URL it was asked to open, rather than opening it

@@ -1,0 +1,36 @@
+{
+  "type": "AdaptiveCard",
+  "version": "1.5",
+  "body": [
+    { "type": "TextBlock", "text": "Deployment waiting for approval", "size": "Large", "weight": "Bolder", "wrap": true },
+    { "type": "TextBlock", "text": "Deploy production: Release 2.4.0", "isSubtle": true, "spacing": "None", "wrap": true },
+    {
+      "type": "FactSet",
+      "facts": [
+        { "title": "Repository", "value": "acme/storefront" },
+        { "title": "Environment", "value": "prod" },
+        { "title": "Started by", "value": "octo-dev" },
+        { "title": "Commit", "value": "67206cd" }
+      ]
+    },
+    {
+      "type": "Input.ChoiceSet", "id": "environments", "label": "Environments", "isMultiSelect": true, "style": "expanded",
+      "value": "prod",
+      "choices": [ { "title": "prod", "value": "prod" }, { "title": "prod-eu", "value": "prod-eu" } ]
+    },
+    { "type": "Input.Text", "id": "comment", "label": "Comment", "isMultiline": true, "placeholder": "Why it's OK to ship" },
+    { "type": "Input.Toggle", "id": "notify", "title": "Tell the team when it's out", "value": "true" }
+  ],
+  "actions": [
+    { "type": "Action.Submit", "title": "Approve and deploy", "style": "positive", "data": { "verb": "approve" } },
+    { "type": "Action.Submit", "title": "Reject", "style": "destructive", "data": { "verb": "reject" } },
+    {
+      "type": "Action.ShowCard", "title": "Details",
+      "card": {
+        "type": "AdaptiveCard",
+        "body": [ { "type": "TextBlock", "text": "Two jobs are done; **deploy** waits on this environment's reviewers.", "wrap": true } ]
+      }
+    },
+    { "type": "Action.OpenUrl", "title": "View run", "url": "https://github.com/features/actions" }
+  ]
+}

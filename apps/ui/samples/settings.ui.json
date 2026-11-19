@@ -1,0 +1,7 @@
+{
+  "ui:order": ["user", "sources", "interval", "*"],
+  "user": { "ui:autofocus": true, "ui:placeholder": "octo-dev" },
+  "interval": { "ui:widget": "updown" },
+  "sources": { "ui:widget": "checkboxes" },
+  "comment": { "ui:widget": "textarea", "ui:options": { "rows": 3 } }
+}

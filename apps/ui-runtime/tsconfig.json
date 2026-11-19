@@ -15,5 +15,8 @@
     {
       "path": "../../packages/ui-sdk"
     }
+  ],
+  "exclude": [
+    "src/renderer"
   ]
 }

@@ -1,3 +1,4 @@
+import { chmodSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createServer, createConnection, type Server, type ListenOptions, type NetConnectOpts } from "node:net";
 import { defineDuplexConnection, defineConnection } from "../connections.js";
@@ -66,6 +67,9 @@ export async function startSocket(
   return new Promise((resolve, reject) => {
     const onListening = () => {
       server.off('error', onError);
+      // a local socket is only this user's to connect to - a named pipe on
+      // Windows keeps its default access, which this doesn't tighten
+      if (options?.path && process.platform !== 'win32') chmodSync(options.path, 0o600);
       resolve(server);
     };
     const onError = (error: Error) => {
