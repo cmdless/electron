@@ -1,7 +1,7 @@
 {
   "name": "@cmdless/ui",
   "description": "One-shot commands for cmdless UI: show a window or a dialog, and print what it ended with.",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "license": "MIT",
   "type": "module",
   "author": {
