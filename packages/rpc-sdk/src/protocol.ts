@@ -226,6 +226,9 @@ export type RpcProtocol<
   client: Client;
   server: Server;
   state: States;
+  // what the protocol calls itself, if it does - so two sides about to talk
+  // can tell they mean the same one
+  name?: string;
   identity?: ProtocolIdentity;
   createClient: (connection: MessageConnection) => RpcClient<Client, StateValues<States>>;
 
@@ -239,6 +242,13 @@ export type RpcProtocol<
   // one unconfigured server peer - what a host's accept is built on, and
   // what a test reaches for directly
   createServer(connection: MessageConnection, ...store: ServerStoreArgs<StateValues<States>>): RpcServer<Server, StateValues<States>>;
+  // what turns each connection into a server peer set up by configure, ready
+  // to listen - a host's accept without the host, for whoever already has
+  // the connections (and, with state channels, the store)
+  accept(
+    configure?: (server: RpcServer<Server, StateValues<States>>) => void,
+    ...store: ServerStoreArgs<StateValues<States>>
+  ): (connection: MessageConnection) => RpcServer<Server, StateValues<States>>;
   // defines a server once; each call of what it returns starts one - the
   // store, and an accept that turns each connection into a configured peer,
   // ready to listen
@@ -249,6 +259,7 @@ function protocol<Client extends RpcChannel, Server extends RpcChannel, States e
   server: Server,
   state: States,
   identity?: ProtocolIdentity,
+  name?: string,
 ): RpcProtocol<Client, Server, States> {
   type S = StateValues<States>;
 
@@ -260,9 +271,18 @@ function protocol<Client extends RpcChannel, Server extends RpcChannel, States e
     client,
     server,
     state,
+    name,
+    identity,
     createClient(connection) { return createRpcClient<Client, S>(client, connection, state, identity); },
     createStore(storage) { return createStore(state, storage); },
     createServer,
+    accept(configure, ...store) {
+      return (connection: MessageConnection) => {
+        const rpc = createServer(connection, ...store);
+        configure?.(rpc);
+        return rpc;
+      };
+    },
     defineHost({ configure, state: storage }) {
       return async () => {
         const store = (storage ? await createStore(state, storage) : undefined) as ServerStore<S>;
@@ -308,8 +328,9 @@ function state<S>(name: string): RpcState<S> {
 }
 
 export type RpcProtocolSpec = Partial<{
-  // who this protocol is, for checkVersion: the version only goes up when a
-  // change breaks clients
+  // who this protocol is: its name, on its own, lets two sides check they
+  // mean the same protocol; with a version, checkVersion also holds them to
+  // it. The version only goes up when a change breaks clients.
   name: string;
   version: number;
   clientToServer: AnySide;
@@ -348,5 +369,5 @@ export function defineProtocol<const P extends RpcProtocolSpec>(factory: Protoco
   const client = channel(mergeSides(clientToServer, eitherToEither), mergeSides(serverToClient, eitherToEither));
   const server = channel(mergeSides(serverToClient, eitherToEither), mergeSides(clientToServer, eitherToEither));
   const identity = spec.name !== undefined && spec.version !== undefined ? { name: spec.name, version: spec.version } : undefined;
-  return protocol(client, server, (spec.state ?? {}) as StatesOf<P>, identity);
+  return protocol(client, server, (spec.state ?? {}) as StatesOf<P>, identity, spec.name);
 }

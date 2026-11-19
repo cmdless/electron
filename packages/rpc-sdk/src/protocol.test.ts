@@ -252,3 +252,21 @@ test('checkVersion fails loudly on a different version, or a server too old to s
     await assert.rejects(client.checkVersion(), message);
   }
 });
+
+test('accept turns each connection into a configured server peer', async () => {
+  const protocol = defineProtocol(({ side, request }) => ({
+    clientToServer: side({ requests: { ping: request<{ text: string }, { text: string }>('ping') } }),
+  }));
+  const { clientConn, serverConn } = createLoopbackPair();
+  const accept = protocol.accept(server => server.onRequest.ping(({ text }) => ({ text: text.toUpperCase() })));
+  const server = accept(serverConn);
+  const client = protocol.createClient(clientConn);
+  server.listen();
+  client.listen();
+  try {
+    assert.deepEqual(await client.request.ping({ text: 'hi' }), { text: 'HI' });
+  } finally {
+    client.dispose();
+    server.dispose();
+  }
+});
