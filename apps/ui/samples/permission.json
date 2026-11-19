@@ -1,0 +1,9 @@
+{
+  "title": "Run `npm publish` in storefront?",
+  "description": "The agent wants to publish **@acme/storefront@2.4.0** to the npm registry. This can't be undone.",
+  "options": [
+    { "optionId": "allow-once", "name": "Allow once", "kind": "allow_once" },
+    { "optionId": "allow-always", "name": "Always allow", "kind": "allow_always" },
+    { "optionId": "reject-once", "name": "Reject", "kind": "reject_once" }
+  ]
+}

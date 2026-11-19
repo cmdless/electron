@@ -3,7 +3,7 @@ import { getAppDataPath, isPendingService, listenExclusive, rejectService, resol
 import type { DaemonService } from '@cmdless/core/node';
 import { memory } from '@cmdless/rpc-sdk';
 import { createSocketServer } from '@cmdless/rpc-sdk/node';
-import { CmdlessUI } from '@cmdless/ui-sdk/node';
+import { UIHost } from '@cmdless/ui-sdk/node';
 import { authProtocol, getAuthSocketPath, providerKey } from '@cmdless/auth-sdk/node';
 import type { AccessToken, OAuthProvider, ProviderStatus } from '@cmdless/auth-sdk';
 import { codeFrom, exchangeCode, refresh, startSignIn, TokenRefused } from './oauth.js';
@@ -59,13 +59,11 @@ async function main() {
       await setStatus(key, { status: 'signing-in' });
       try {
         const attempt = startSignIn(provider);
-        const redirectedTo = await new CmdlessUI().show({
-          kind: 'show', type: 'url', source: attempt.url,
-          app: 'cmdless-auth', width: 520, height: 720,
-          redirect: provider.redirectUri,
+        const redirectedTo = await UIHost.showWindow<string | undefined>({ app: 'cmdless-auth' }, {
+          type: 'url', source: attempt.url, window: { width: 520, height: 720 }, redirect: provider.redirectUri,
         });
-        // the window resolves to nothing when it's closed instead
-        if (!redirectedTo.startsWith(provider.redirectUri)) throw new Error('sign-in cancelled');
+        // the window ends with nothing when it's closed instead
+        if (!redirectedTo?.startsWith(provider.redirectUri)) throw new Error('sign-in cancelled');
         const code = codeFrom(redirectedTo, attempt.state);
         return keep(key, await exchangeCode(provider, code, attempt.verifier));
       } catch (error) {

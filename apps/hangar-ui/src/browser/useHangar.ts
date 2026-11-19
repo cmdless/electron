@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ClientOf, StateSubscription } from '@cmdless/rpc-sdk';
 import { connectWebSocket } from '@cmdless/rpc-sdk/ws';
+import { connect } from '@cmdless/ui-sdk/browser';
 import { hangarProtocol } from '@cmdless/hangar-sdk';
 import { windowProtocol } from '../shared/protocols';
 
@@ -14,10 +15,7 @@ async function findHangar(): Promise<string> {
 
   if (!window.cmdless)
     throw new Error('Not opened by hangar-ui, and no ?hangar=<address> given.');
-  const { address } = await window.cmdless.ipc.request.connectionInfo();
-  if (!address) throw new Error('The window that opened this one serves no connection.');
-  const opener = await connectWebSocket(windowProtocol, { url: address });
-  opener.listen();
+  const opener = await connect(windowProtocol);
   try {
     return (await opener.request.hangar()).url;
   } finally {

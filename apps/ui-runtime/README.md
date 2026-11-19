@@ -1,22 +1,23 @@
 # @cmdless/ui-runtime
 
-The actual Electron app behind cmdless UI. It's an Electron app without a renderer of its own — the caller provides one (a URL or a file) if they need it.
+The actual Electron app behind cmdless UI. Windows show the caller's own page (a URL or a file); cards and forms show the host's own page, which draws an [Adaptive Card](https://adaptivecards.io) or a JSON Schema form ([react-jsonschema-form](https://rjsf-team.github.io/react-jsonschema-form/), in Mantine).
 
-Normally you don't run this directly; [`@cmdless/ui`](../ui) caches and forwards to it. It's a separate package because the two have very different dependencies: `@cmdless/ui` is a plain Node CLI, while this one needs Electron itself.
+Normally you don't run this directly: `UIHost` in [`@cmdless/ui-sdk/node`](../../packages/ui-sdk) starts it, and [`@cmdless/ui`](../ui)'s one-shot commands go through `UIHost`. It's a separate package because it needs Electron itself.
 
-## Commands
+## Command
 
-- `show <url|file> <source>` — open a `BrowserWindow` loading a URL or a local file.
-- `message-box <type> <message>` — show a native message box.
+- `host` — run the host for an app. It takes no arguments: the app's name comes from `CMDLESS_APP` (left out, a throwaway one is made), the cmdless root from `CMDLESS_ROOT`, and where to report its address from `CMDLESS_SERVICE_SOCKET` (set by `waitForService`).
 
-Both accept `--app <name>` to group windows/dialogs under one Electron app identity — matching names share a `userData` profile and are single-instanced; omitting it creates a throwaway, self-cleaning ephemeral session for that one invocation.
+## How it hosts
 
-## MCP mediation
+Electron main is itself the host: it takes the app's single-instance lock, serves the `UIHost` protocol on a local socket, and reports the address to whoever started it. `UIHost`s connect there to open windows, dialogs, cards, forms, trays and notifications, each tracked as a handle that ends with a value.
 
-A hosted window's renderer can ask main for any package's MCP server address (`cmdlessIPC`'s `mcpAddress` request, from a `createClient` facade in [`@cmdless/ui-sdk/browser`](../../packages/ui-sdk)) — main resolves and spawns it via `runAsMcp`. This app never runs any package's own `createApp` in-process (that lives in the package's own bin process, the one that invoked `createShowCommand`), so every request, including a package asking for its own tools, resolves the same way.
+- **One host per app name.** A host started for an app that's already running loses the lock and hands the running one a reply socket; the running host answers once its owner has connected, and the loser passes the address on to its own creator before quitting.
+- **The owner decides its lifetime.** The first `UIHost` to connect — the one whose creator started the process that got the lock — owns the host, and the host quits when it disconnects. Everything another `UIHost` opened goes with it.
+- **Throwaway hosts clean up after themselves.** An app with no name gets a throwaway one under temp; a small process (`cleanup.ts`) that outlives the host removes its `userData` once it's gone, however it ends.
+- **The Dock icon** shows only while a window or dialog is open; trays live outside it.
 
-Instances are cached per window tree, not globally: a request walks up from the requesting window through its ancestors (Electron's own `--parent` chain) looking for an existing instance of that package; if none exists anywhere up the chain, the requesting window opens one itself and owns it. Sibling windows sharing a parent therefore reuse one instance by default, but two unrelated top-level windows never do - and closing the window that owns an instance disposes it immediately, rather than it lingering until the whole app quits.
+- **Windows are sandboxed.** A window's page gets `window.cmdless` from the preload and nothing else. When it asks for its backend, the host asks the window's `UIHost`, which answers with a loopback WebSocket address and a token for one connection; the preload connects with it, and the page only ever sees a socket to send and hear messages on.
+- **The host's own page** (`src/renderer`) draws cards and forms. Its content security policy allows no eval: the form validates with `@cfworker/json-schema` rather than ajv. It never navigates, links open in the browser, and Markdown in card text is rendered with raw HTML escaped. A card can hold a JSON Schema form as an input (`Input.JsonSchema`), which is how elicitation is asked. The page measures its content and the window fits its height to it.
 
-## How it resolves
-
-Each invocation resolves to a single value (whatever the window or dialog produced) and exits. The wrapper CLI (`bin.ts`) talks to the actual Electron process over a `BinChannel` (a small local-socket protocol from [`@cmdless/ui-sdk/node`](../../packages/ui-sdk)) — not stdout, and deliberately not Node's `child_process` `'ipc'` stdio channel either. `'ipc'` is a documented source of `app.whenReady()` hangs when combined with Electron ([electron/electron#17044](https://github.com/electron/electron/issues/17044)); a plain socket avoids that while still keeping anything Electron itself logs out of the value being returned.
+On macOS, as in Electron itself, a message box with no parent window runs synchronously: it holds up the whole host until it's answered, and can't be closed by code. One opened from a window is a sheet on it, and doesn't.
