@@ -29,7 +29,7 @@ export async function tokenFor(user: string): Promise<string | undefined> {
 
 // a sign-in gh is running: the one-time code to enter at `url`, and whether it
 // finished once it's done (gh stores the account itself)
-export type Login = {
+type Login = {
   code: string;
   url: string;
   done: Promise<boolean>;

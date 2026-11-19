@@ -54,5 +54,7 @@ export default defineConfig({
   // don't let vite wipe the terminal - the spawned bin's inherited stdio
   // (and anything electron/ensure-electron prints) would get cleared with it.
   clearScreen: false,
+  // the built page is opened from a file, so its assets are found beside it
+  base: './',
   plugins: [react(), cmdless()],
 })
