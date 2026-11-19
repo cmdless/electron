@@ -63,12 +63,18 @@ export type CmdlessSocket = {
   close(): void;
 };
 
+// what tells a window's preload, at start, that its window has a backend
+export const BACKEND_ARG = '--cmdless-backend';
+
 // what a window's page gets as window.cmdless
 export type Cmdless = {
   // ends the window with a value - or, with a non-zero exit code, as failed
   resolve(value: unknown, exitCode?: number): void;
-  // opens a connection to the backend the window was opened with; use
-  // connect() from @cmdless/ui-sdk/browser
+  // the connection to the backend the window was opened with, started as
+  // the page loads - or nothing, if it has none. Use connect() from
+  // @cmdless/ui-sdk/browser.
+  backend?: Promise<CmdlessSocket>;
+  // another connection to it, for when the first has been used
   connect(): Promise<CmdlessSocket>;
   view: ReturnType<typeof cmdlessViewIPC.createClient>;
 };

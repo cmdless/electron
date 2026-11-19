@@ -31,7 +31,7 @@ export type OpenSignIn = (url: string, callback: string, title: string) => Promi
 // sign-in windows leave the app name unset, so each gets a host of its own -
 // one that can be closed, and whose data is cleaned up after it
 export const openWindow: OpenSignIn = async (url, callback, title) => {
-  const redirectedTo = await UIHost.showWindow<string | undefined>({}, {
+  const redirectedTo = await UIHost.showWindow<string | undefined>({
     type: 'url', source: url, window: { title, width: 520, height: 720 }, redirect: callback,
   });
   return redirectedTo?.startsWith(callback) ? redirectedTo : undefined;

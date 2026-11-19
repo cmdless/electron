@@ -19,12 +19,21 @@ declare global {
 // sets up handlers before the connection listens, so nothing the backend
 // sends right away is missed. A protocol with a name and version can be held
 // to them with checkVersion() once connected.
+//
+// The first connect() picks up the connection started as the page loaded;
+// any after it (a component mounted again, say) get one of their own. A
+// window opened without a backend fails at once rather than waiting: check
+// window.cmdless.backend first to tell beforehand.
+let claimed = false;
 export async function connect<P extends ClientProtocol>(
   protocol: P,
   configure?: (backend: ClientOf<P>) => void,
 ): Promise<ClientOf<P>> {
   if (!window.cmdless) throw new Error('not in a cmdless window');
-  const socket = await window.cmdless.connect();
+  if (!window.cmdless.backend) throw new Error('this window was opened without a backend');
+  const first = !claimed;
+  claimed = true;
+  const socket = await (first ? window.cmdless.backend : window.cmdless.connect());
   const backend = protocol.createClient(createSocketConnection({
     send: message => socket.send(message),
     onMessage: listener => socket.onMessage(listener),

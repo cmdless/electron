@@ -21,8 +21,9 @@ hangar.dispose();
 // built renderer. hangar's WebSocket address carries its token, so the
 // window asks this process for it over its backend rather than its URL.
 const dev = acquireCmdlessUrl();
-await UIHost.showWindow({ app: 'hangar' }, {
+await UIHost.showWindow({
   type: dev ? 'url' : 'file',
   source: `${dev || distIndex}#/agents`,
   window: { width: 1000, height: 720 },
-}, windowProtocol.accept(page => page.onRequest.hangar(() => ({ url }))));
+  backend: windowProtocol.accept(page => page.onRequest.hangar(() => ({ url }))),
+}, { app: 'hangar' });

@@ -56,7 +56,15 @@ export type WindowParams = {
   external?: boolean;
   window?: WindowOptions;
   parent?: string;
+  // serves the page's connect(): each connection it makes to this process
+  // (once per load) is handed to this. Never sent to the host - it only
+  // hears that there is one.
+  backend?: WindowBackend;
 };
+
+// a window to open, as the host hears of it: its backend is only a key - the
+// UIHost's name for it, which the host asks for it by when the page connects
+export type WindowOpenParams = Omit<WindowParams, 'backend'> & { backend?: string };
 
 // a message box to show, and (by its handle's id) what it shows in front of
 export type DialogParams = {
@@ -69,6 +77,10 @@ export type DialogParams = {
   // which button Enter chooses, and which Escape (or closing it) does
   defaultId?: number;
   cancelId?: number;
+  // a checkbox under the message, and whether it starts ticked - whether it
+  // ended ticked comes back with the button chosen
+  checkboxLabel?: string;
+  checkboxChecked?: boolean;
   parent?: string;
 };
 
@@ -128,9 +140,10 @@ export type ClipboardWriteParams = { text: string };
 // a window, dialog or tray this UIHost opened
 export type HandleParams = { id: string };
 
-// a window's page wants its backend: the window's UIHost answers with where
-// to connect and a token good for one connection
-export type WindowConnectParams = HandleParams;
+// a window's page wants its backend, by the key the window was opened with:
+// the window's UIHost answers with where to connect and a token good for one
+// connection
+export type WindowConnectParams = { backend: string };
 export type WindowConnectResult = { url: string; token: string };
 
 // ends a handle, with the value it ends with
@@ -145,11 +158,12 @@ const uiHostProtocol = defineProtocol(({ side, request, notification }) => ({
   clientToServer: side({
     requests: {
       init: request<InitializeParams, InitializeResult>('init'),
-      windowOpen: request<WindowParams, HandleParams>('window/open'),
+      windowOpen: request<WindowOpenParams, HandleParams>('window/open'),
       dialogOpen: request<DialogParams, HandleParams>('dialog/open'),
       trayCreate: request<TrayParams, HandleParams>('tray/create'),
       trayUpdate: request<TrayUpdateParams>('tray/update'),
       handleClose: request<HandleCloseParams>('handle/close'),
+      handleFocus: request<HandleParams>('handle/focus'),
       shellOpenExternal: request<OpenExternalParams>('shell/openExternal'),
       clipboardWriteText: request<ClipboardWriteParams>('clipboard/writeText'),
       notificationShow: request<NotificationParams, HandleParams>('notification/show'),
@@ -195,8 +209,25 @@ const UNCLAIMED_MS = 60_000;
 // how a remote handle is ended - by its UIHost, which hears it
 const end = Symbol('end');
 
+// what something can be opened from: a UIHost, on its own, or a handle, in
+// front of it. A factory opens through one, and reaches the host itself (its
+// shell, its clipboard) through .host.
+export interface UIOpener {
+  readonly host: UIHost;
+  openWindow<W = unknown>(params: Omit<WindowParams, 'parent'>): Promise<RemoteWindow<W>>;
+  openDialog(params: Omit<DialogParams, 'parent'>): Promise<RemoteDialog>;
+  openCard(params: Omit<CardParams, 'parent'>): Promise<RemoteCard>;
+  openForm<F = unknown>(params: Omit<FormParams, 'parent'>): Promise<RemoteForm<F>>;
+  open<P, H extends RemoteHandle<any>>(factory: UIFactory<P, H>, params: P): Promise<H>;
+}
+
+// something to open, typed by its own params: a window and the backend that
+// serves it, say - opened in whoever's process calls it, from whatever it's
+// given to open from. Define one with UIHost.factory.
+export type UIFactory<P, H extends RemoteHandle<any>> = (opener: UIOpener, params: P) => Promise<H>;
+
 // a window, dialog or tray a UIHost has opened on its host
-export abstract class RemoteHandle<T = unknown> {
+export abstract class RemoteHandle<T = unknown> implements UIOpener {
   // the value it ends with: a window's resolve, the redirect it caught, or
   // nothing if it was closed by hand. Rejects if it failed, or the host went.
   readonly closed: Promise<T>;
@@ -213,9 +244,15 @@ export abstract class RemoteHandle<T = unknown> {
     return this.host.client.request.handleClose({ id: this.id, value });
   }
 
+  // brings its window to the front, restored if it was minimized - nothing,
+  // for what has no window of its own (a dialog, a tray, a notification)
+  focus() {
+    return this.host.client.request.handleFocus({ id: this.id });
+  }
+
   // opens a window in front of this one
-  openWindow<W = unknown>(params: Omit<WindowParams, 'parent'>, backend?: WindowBackend) {
-    return this.host.openWindow<W>({ ...params, parent: this.id }, backend);
+  openWindow<W = unknown>(params: Omit<WindowParams, 'parent'>) {
+    return this.host.openWindow<W>({ ...params, parent: this.id });
   }
 
   // shows a dialog in front of this one
@@ -231,6 +268,11 @@ export abstract class RemoteHandle<T = unknown> {
   // opens a form window in front of this one
   openForm<F = unknown>(params: Omit<FormParams, 'parent'>) {
     return this.host.openForm<F>({ ...params, parent: this.id });
+  }
+
+  // opens what a factory opens, in front of this one
+  open<P, H extends RemoteHandle<any>>(factory: UIFactory<P, H>, params: P): Promise<H> {
+    return factory(this, params);
   }
 
   [end]({ value, error }: Omit<HandleClosedParams, 'id'>) {
@@ -315,8 +357,19 @@ export class UIClipboardHandler {
   }
 }
 
-export class UIHost {
+export class UIHost implements UIOpener {
   static readonly protocol = uiHostProtocol;
+
+  // defines a factory: only there to infer and check its params and handle,
+  // the way defineProtocol is for protocols
+  static factory<P, H extends RemoteHandle<any>>(factory: UIFactory<P, H>) {
+    return factory;
+  }
+
+  // a host is its own: what a factory reaches through its opener
+  get host() {
+    return this;
+  }
 
   readonly shell = new UIShellHandler(this);
   readonly clipboard = new UIClipboardHandler(this);
@@ -326,14 +379,11 @@ export class UIHost {
   // goes out ahead of the reply to dialog/open. An end for a handle not known
   // yet is kept here until its open is answered - for a while, not forever.
   private readonly unclaimed = new Map<string, HandleClosedParams>();
-  // each window opened with a backend: what accepts a connection to it, and
-  // the name of the protocol it speaks
+  // each open window's backend, by the key it was opened with - known before
+  // the window is, so a page can never ask for one that isn't here yet
   private readonly backends = new Map<string, WindowBackend>();
-  // windows being opened with a backend, until the host has answered with
-  // their ids - a page asking for one waits on these rather than on time
-  private readonly opening = new Set<Promise<unknown>>();
   // tokens handed out and not yet used, each good for one connection to one
-  // window's backend
+  // window's backend (by its key)
   private readonly tokens = new Map<string, string>();
   // where every window's backend is reached, started when a page first asks
   private backendServer?: Promise<WebSocketServer>;
@@ -341,7 +391,6 @@ export class UIHost {
   private constructor(readonly client: UIClient, readonly params: InitializeResult) {
     client.onRequest.windowConnect(params => this.connectWindow(params));
     client.onNotification.handleClosed(params => {
-      this.forgetBackend(params.id);
       const remote = this.remotes.get(params.id);
       this.remotes.delete(params.id);
       if (remote) return remote[end](params);
@@ -363,16 +412,12 @@ export class UIHost {
     });
   }
 
-  // a window's page asking for its backend: a token for one connection,
-  // once the window is known to have one - if it's still being opened, once
-  // the host has said which it is
-  private async connectWindow({ id }: WindowConnectParams): Promise<WindowConnectResult> {
-    if (!this.backends.has(id) && this.opening.size > 0) await Promise.allSettled([...this.opening]);
-    if (!this.backends.has(id)) throw new Error('this window was opened without a backend');
-
+  // a window's page asking for its backend: a token for one connection
+  private async connectWindow({ backend }: WindowConnectParams): Promise<WindowConnectResult> {
+    if (!this.backends.has(backend)) throw new Error('that window\'s backend is gone');
     const server = await (this.backendServer ??= this.startBackendServer());
     const token = randomBytes(24).toString('base64url');
-    this.tokens.set(token, id);
+    this.tokens.set(token, backend);
     return { url: getWebSocketUrl(server), token };
   }
 
@@ -383,9 +428,9 @@ export class UIHost {
     const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     server.on('connection', (socket, request) => {
       const token = new URL(request.url ?? '/', 'ws://backend').searchParams.get('token') ?? '';
-      const id = this.tokens.get(token);
+      const key = this.tokens.get(token);
       this.tokens.delete(token);
-      const backend = id === undefined ? undefined : this.backends.get(id);
+      const backend = key === undefined ? undefined : this.backends.get(key);
       if (!backend) return socket.close(1008, 'not a token for an open window');
       backend(createWebSocket(socket)).listen();
     });
@@ -401,9 +446,9 @@ export class UIHost {
   }
 
   // a window that's gone takes its backend, and any tokens for it, with it
-  private forgetBackend(id: string) {
-    if (!this.backends.delete(id)) return;
-    for (const [token, owner] of this.tokens) if (owner === id) this.tokens.delete(token);
+  private forgetBackend(key: string) {
+    this.backends.delete(key);
+    for (const [token, owner] of this.tokens) if (owner === key) this.tokens.delete(token);
   }
 
   // starts ui-runtime's host, detached, for it to report where it can be
@@ -429,40 +474,45 @@ export class UIHost {
 
   // starts or joins a host, shows one window on it, and hands back the
   // value it ends with - leaving the host once it has
-  static showWindow<T = unknown>(options: CreateHostOptions, params: WindowParams, backend?: WindowBackend) {
-    return UIHost.once(options, host => host.openWindow<T>(params, backend));
+  static showWindow<T = unknown>(params: WindowParams, options?: CreateHostOptions) {
+    return UIHost.once(options, host => host.openWindow<T>(params));
   }
 
   // the same for a dialog, handing back what was chosen
-  static showDialog(options: CreateHostOptions, params: DialogParams) {
+  static showDialog(params: DialogParams, options?: CreateHostOptions) {
     return UIHost.once(options, host => host.openDialog(params));
   }
 
   // the same for a card, handing back the Action.Submit chosen on it - or
   // nothing, if it was closed
-  static showCard(options: CreateHostOptions, params: CardParams) {
+  static showCard(params: CardParams, options?: CreateHostOptions) {
     return UIHost.once(options, host => host.openCard(params));
   }
 
   // asks an elicitation's question as a card, handing back its answer -
   // cancel, if the card was closed
-  static async showElicitation(options: CreateHostOptions, request: ElicitationRequest & { window?: WindowOptions }) {
-    return elicitationResult(await UIHost.showCard(options, { card: elicitationCard(request), window: request.window }));
+  static async showElicitation(request: ElicitationRequest & { window?: WindowOptions }, options?: CreateHostOptions) {
+    return elicitationResult(await UIHost.showCard({ card: elicitationCard(request), window: request.window }, options));
   }
 
   // asks a permission request as a card, handing back its outcome -
   // cancelled, if the card was closed
-  static async showPermission(options: CreateHostOptions, request: PermissionRequest & { window?: WindowOptions }) {
-    return permissionResult(await UIHost.showCard(options, { card: permissionCard(request), window: request.window }));
+  static async showPermission(request: PermissionRequest & { window?: WindowOptions }, options?: CreateHostOptions) {
+    return permissionResult(await UIHost.showCard({ card: permissionCard(request), window: request.window }, options));
   }
 
   // the same for a form, handing back what it was submitted with - or
   // nothing, if it was cancelled
-  static showForm<F = unknown>(options: CreateHostOptions, params: FormParams) {
+  static showForm<F = unknown>(params: FormParams, options?: CreateHostOptions) {
     return UIHost.once(options, host => host.openForm<F>(params));
   }
 
-  private static async once<T>(options: CreateHostOptions, open: (host: UIHost) => Promise<RemoteHandle<T>>) {
+  // the same for what a factory opens, handing back what it ends with
+  static show<P, T>(factory: UIFactory<P, RemoteHandle<T>>, params: P, options?: CreateHostOptions) {
+    return UIHost.once(options, host => factory(host, params));
+  }
+
+  private static async once<T>(options: CreateHostOptions | undefined, open: (host: UIHost) => Promise<RemoteHandle<T>>) {
     const host = await UIHost.create(options);
     try {
       return await (await open(host)).closed;
@@ -471,23 +521,30 @@ export class UIHost {
     }
   }
 
+  // opens what a factory opens, on this host
+  open<P, H extends RemoteHandle<any>>(factory: UIFactory<P, H>, params: P): Promise<H> {
+    return factory(this, params);
+  }
+
   // opens a window, once the host has - with a backend, its page can
   // connect() to this process directly, the host only introducing them
-  async openWindow<T = unknown>(params: WindowParams, backend?: WindowBackend): Promise<RemoteWindow<T>> {
+  async openWindow<T = unknown>({ backend, ...params }: WindowParams): Promise<RemoteWindow<T>> {
     if (!backend) {
       const { id } = await this.client.request.windowOpen(params);
       return this.track(new RemoteWindow<T>(this, id));
     }
-    // the backend is known by the time anything can hear of the window's id
-    const opened = this.client.request.windowOpen(params).then(({ id }) => {
-      this.backends.set(id, backend);
-      return id;
-    });
-    this.opening.add(opened);
+    // the backend is here, under a key of its own, before the host hears of
+    // the window - and goes when the window does, however it ends
+    const key = randomBytes(12).toString('base64url');
+    this.backends.set(key, backend);
     try {
-      return this.track(new RemoteWindow<T>(this, await opened));
-    } finally {
-      this.opening.delete(opened);
+      const { id } = await this.client.request.windowOpen({ ...params, backend: key });
+      const window = this.track(new RemoteWindow<T>(this, id));
+      void window.closed.catch(() => { }).finally(() => this.forgetBackend(key));
+      return window;
+    } catch (error) {
+      this.forgetBackend(key);
+      throw error;
     }
   }
 
