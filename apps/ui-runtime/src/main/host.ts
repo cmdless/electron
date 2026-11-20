@@ -1,15 +1,16 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { app } from 'electron';
+import { app, shell } from 'electron';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import {
   isEphemeralCmdlessApp, listenOnce, rejectService, resolveCmdlessApp, resolveService, sendTo,
 } from '@cmdless/ui-sdk/node';
 import type { HostService } from '@cmdless/ui-sdk/node';
 import { DialogHandle, Host } from './hosting.js';
-import { appId, writeDesktopFile } from './platform.js';
+import { appId, startMenuShortcut, writeDesktopFile } from './platform.js';
 
 // what a process that lost the lock hands the lock holder: where to send
 // this host's address, once its owner has connected
@@ -32,6 +33,19 @@ function cleanUpWhenGone(userData: string) {
   });
   cleaner.stdin?.on('error', () => { });
   cleaner.unref();
+}
+
+// Windows: the Start Menu shortcut that names a named app's notifications -
+// kept pointing at whichever copy of Electron it last ran from
+function writeShortcut(appName: string) {
+  const file = startMenuShortcut(appName);
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const options = { target: process.execPath, appUserModelId: appId(appName), description: appName };
+    if (!shell.writeShortcutLink(file, fs.existsSync(file) ? 'replace' : 'create', options)) throw new Error('not written');
+  } catch (error) {
+    console.error(`ui-runtime: couldn't write ${file}:`, (error as Error).message);
+  }
 }
 
 // how long the owner gets to connect once it's been told where to
@@ -82,6 +96,7 @@ async function main() {
     // what the taskbar groups windows by, and names notifications for - a
     // named app's own (see platform.ts)
     electronApp.setAppUserModelId(ephemeral ? 'dev.cmdless.ui' : appId(appName));
+    if (process.platform === 'win32' && !ephemeral) writeShortcut(appName);
     // Default open or close DevTools by F12 in development
     // and ignore CommandOrControl + R in production.
     // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
