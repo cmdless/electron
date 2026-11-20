@@ -21,9 +21,9 @@ export const displayName = (appName: string) => appName.replace(/^@[^/]+\//, '')
 // executable and bundle are named this, and its id is dev.cmdless.<this>
 export const exeName = (appName: string) => displayName(appName).replace(/[^A-Za-z0-9.-]+/g, '-');
 
-// the id a named app goes by everywhere: its bundle id on macOS, its
-// AppUserModelID on Windows, its .desktop file's name on Linux (so two apps
-// differing only by scope share one)
+// the id a named app goes by on macOS (its bundle id) and Linux (its .desktop
+// file's name) - so two apps differing only by scope share one. Windows goes
+// by the executable's name alone, since it shows its id as the app's name.
 export const appId = (appName: string) => `dev.cmdless.${exeName(appName)}`;
 
 // macOS: the app's own copy of Electron's bundle, named for it, under
