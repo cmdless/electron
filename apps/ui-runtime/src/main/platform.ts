@@ -17,13 +17,14 @@ import { execFileSync } from 'node:child_process';
 // is gh-approvals
 export const displayName = (appName: string) => appName.replace(/^@[^/]+\//, '');
 
-// the id a named app goes by everywhere: its bundle id on macOS, its
-// AppUserModelID on Windows, its .desktop file's name on Linux - its display
-// name, as an id can hold it (so two apps differing only by scope share one)
-export const appId = (appName: string) => `dev.cmdless.${displayName(appName).replace(/[^A-Za-z0-9.-]+/g, '-')}`;
+// the display name as a file name and an id can both hold it: the app's
+// executable and bundle are named this, and its id is dev.cmdless.<this>
+export const exeName = (appName: string) => displayName(appName).replace(/[^A-Za-z0-9.-]+/g, '-');
 
-// a display name as a file name can hold it
-const fileNameOf = (appName: string) => displayName(appName).replace(/[/\\:]+/g, '-');
+// the id a named app goes by everywhere: its bundle id on macOS, its
+// AppUserModelID on Windows, its .desktop file's name on Linux (so two apps
+// differing only by scope share one)
+export const appId = (appName: string) => `dev.cmdless.${exeName(appName)}`;
 
 // macOS: the app's own copy of Electron's bundle, named for it, under
 // <root>/apps/<app>/bundles/<electron version> - made once per Electron
@@ -34,7 +35,7 @@ const fileNameOf = (appName: string) => displayName(appName).replace(/[/\\:]+/g,
 // space. The stock executable, if a copy can't be made.
 export function appBundle(stockExecPath: string, appName: string, electronVersion: string, root: string) {
   const stock = path.resolve(stockExecPath, '../../..');
-  const name = fileNameOf(appName);
+  const name = exeName(appName);
   const folder = path.join(root, 'apps', appName, 'bundles', electronVersion);
   const bundle = path.join(folder, `${name}.app`);
   const execPath = path.join(bundle, 'Contents', 'MacOS', name);
