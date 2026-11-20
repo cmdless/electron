@@ -9,7 +9,7 @@ import {
 } from '@cmdless/ui-sdk/node';
 import type { HostService } from '@cmdless/ui-sdk/node';
 import { DialogHandle, Host } from './hosting.js';
-import { appId, writeDesktopFile } from './platform.js';
+import { exeName, writeDesktopFile } from './platform.js';
 
 // what a process that lost the lock hands the lock holder: where to send
 // this host's address, once its owner has connected
@@ -80,8 +80,8 @@ async function main() {
   const ready = (async () => {
     await app.whenReady();
     // what the taskbar groups windows by, and names notifications for - a
-    // named app's own (see platform.ts)
-    electronApp.setAppUserModelId(ephemeral ? 'dev.cmdless.ui' : appId(appName));
+    // named app's own name (see platform.ts)
+    electronApp.setAppUserModelId(ephemeral ? 'dev.cmdless.ui' : exeName(appName));
     // Default open or close DevTools by F12 in development
     // and ignore CommandOrControl + R in production.
     // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
