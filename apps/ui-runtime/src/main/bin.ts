@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { ensureElectron, getDefaultCmdlessRoot } from '@cmdless/ensure-electron';
 import { getCmdlessApp, isEphemeralCmdlessApp } from '@cmdless/ui-sdk/node';
-import { appBundle } from './platform.js';
+import { appExecutable } from './platform.js';
 import pkg from "../../package.json" with { type: "json" };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,11 +44,11 @@ program
   .action(async () => {
     const stockExecPath = await ensureElectron({ meta: import.meta, electronVersion, rebuild: true });
     signForMacOS(stockExecPath);
-    // a named app runs as itself on macOS; a throwaway one (named only once
-    // it's running) as Electron
+    // a named app runs as itself; a throwaway one (named only once it's
+    // running) as Electron
     const app = getCmdlessApp();
-    const execPath = process.platform === 'darwin' && app && !isEphemeralCmdlessApp(app)
-      ? appBundle(stockExecPath, app, electronVersion, getDefaultCmdlessRoot())
+    const execPath = app && !isEphemeralCmdlessApp(app)
+      ? appExecutable(stockExecPath, app, electronVersion, getDefaultCmdlessRoot())
       : stockExecPath;
     const child = spawn(execPath, [hostEntry], { stdio: 'inherit' });
     child.once('exit', code => { process.exitCode = code ?? 1; });
