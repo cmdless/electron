@@ -12,18 +12,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-// an app name as an id can hold it - an npm scope as a part of its own:
-// @cmdless/gh-approvals is cmdless.gh-approvals
-const idOf = (appName: string) => appName.replace(/^@/, '').replace(/\//g, '.').replace(/[^A-Za-z0-9.-]+/g, '-');
-
-// the id a named app goes by everywhere: its bundle id on macOS, its
-// AppUserModelID on Windows, its .desktop file's name on Linux
-export const appId = (appName: string) => `dev.cmdless.${idOf(appName)}`;
-
 // what a named app is called where people see it - the Dock, the app menu,
 // its process - which is its name without an npm scope: @cmdless/gh-approvals
 // is gh-approvals
 export const displayName = (appName: string) => appName.replace(/^@[^/]+\//, '');
+
+// the id a named app goes by everywhere: its bundle id on macOS, its
+// AppUserModelID on Windows, its .desktop file's name on Linux - its display
+// name, as an id can hold it (so two apps differing only by scope share one)
+export const appId = (appName: string) => `dev.cmdless.${displayName(appName).replace(/[^A-Za-z0-9.-]+/g, '-')}`;
 
 // a display name as a file name can hold it
 const fileNameOf = (appName: string) => displayName(appName).replace(/[/\\:]+/g, '-');
