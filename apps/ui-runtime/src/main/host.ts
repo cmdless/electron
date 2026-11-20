@@ -9,6 +9,7 @@ import {
 } from '@cmdless/ui-sdk/node';
 import type { HostService } from '@cmdless/ui-sdk/node';
 import { Host } from './hosting.js';
+import { appId, writeDesktopFile } from './platform.js';
 
 // what a process that lost the lock hands the lock holder: where to send
 // this host's address, once its owner has connected
@@ -53,6 +54,8 @@ async function main() {
   app.setName(appName);
   app.setPath('userData', userData);
   if (ephemeral) cleanUpWhenGone(userData);
+  // Linux names a named app's windows from its .desktop file
+  if (process.platform === 'linux' && !ephemeral) app.setDesktopName(writeDesktopFile(appName, process.execPath));
 
   // losing the lock: the lock holder sends its address here once its own
   // owner has connected, and this process passes it on to its creator
@@ -70,8 +73,9 @@ async function main() {
   // everything that has to be set up before a host is answered
   const ready = (async () => {
     await app.whenReady();
-    // Set app user model id for windows
-    electronApp.setAppUserModelId('dev.cmdless.ui');
+    // what the taskbar groups windows by, and names notifications for - a
+    // named app's own (see platform.ts)
+    electronApp.setAppUserModelId(ephemeral ? 'dev.cmdless.ui' : appId(appName));
     // Default open or close DevTools by F12 in development
     // and ignore CommandOrControl + R in production.
     // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
