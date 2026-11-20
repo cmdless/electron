@@ -8,7 +8,7 @@ import {
   isEphemeralCmdlessApp, listenOnce, rejectService, resolveCmdlessApp, resolveService, sendTo,
 } from '@cmdless/ui-sdk/node';
 import type { HostService } from '@cmdless/ui-sdk/node';
-import { Host } from './hosting.js';
+import { DialogHandle, Host } from './hosting.js';
 import { appId, writeDesktopFile } from './platform.js';
 
 // what a process that lost the lock hands the lock holder: where to send
@@ -37,11 +37,17 @@ function cleanUpWhenGone(userData: string) {
 // how long the owner gets to connect once it's been told where to
 const OWNER_TIMEOUT_MS = 10_000;
 
+// quits - once any app-modal message box is answered: macOS won't let an
+// app quit while one is up, and one asked for meanwhile is lost
+function quit() {
+  void DialogHandle.whenNoneModal().then(() => app.quit());
+}
+
 async function main() {
   // without this, Ctrl+C leaves Electron's own default (uncontrolled)
   // teardown to tear down windows
-  process.on('SIGINT', () => app.quit());
-  process.on('SIGTERM', () => app.quit());
+  process.on('SIGINT', quit);
+  process.on('SIGTERM', quit);
 
   // no Dock icon until a window or dialog is showing
   app.dock?.hide();
@@ -86,7 +92,7 @@ async function main() {
 
   const host = await Host.start({ appName, userData, ephemeral }, ready);
   // the host lives as long as its owner's connection
-  void host.ownerClosed.then(() => app.quit());
+  void host.ownerClosed.then(quit);
   // a Dock icon only while a window or dialog is open - changed only when
   // that flips, since show() settles later and a stray one would undo a hide
   let docked = false;
@@ -112,7 +118,7 @@ async function main() {
   // the owner is told where to connect - and if it never does, nothing
   // would ever end this process, so it ends itself
   await resolveService(host.service);
-  const ownerTimeout = setTimeout(() => app.quit(), OWNER_TIMEOUT_MS);
+  const ownerTimeout = setTimeout(quit, OWNER_TIMEOUT_MS);
   void host.owned.then(() => clearTimeout(ownerTimeout));
 }
 

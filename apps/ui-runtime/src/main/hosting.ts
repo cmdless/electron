@@ -348,12 +348,24 @@ function loadFileWithHash(win: BrowserWindow, source: string) {
 
 // a message box, ending with the button that was chosen. Closing it any
 // other way - its UIHost, or its connection going - dismisses it.
-// On macOS, as in Electron itself, a message box with no window to sit on
-// runs synchronously: it holds up this whole process - every UIHost on it -
-// until it's answered, and can't be dismissed. One opened from a window is a
-// sheet on it, and doesn't.
+// On macOS a message box with no window to sit on is app-modal, as any
+// native alert is: only the user can end it - code can't dismiss it, and
+// the app can't quit until it's answered (see whenNoneModal). One opened
+// from a window is a sheet on it, and can be dismissed.
 export class DialogHandle extends UIHandle {
+  // the app-modal message boxes showing, and what's waiting on there being
+  // none
+  private static modal = 0;
+  private static waiting: (() => void)[] = [];
+
+  // settles once no app-modal message box is showing
+  static whenNoneModal() {
+    if (DialogHandle.modal === 0) return Promise.resolve();
+    return new Promise<void>(resolve => DialogHandle.waiting.push(resolve));
+  }
+
   private readonly dismissed = new AbortController();
+  private readonly modal: boolean;
 
   constructor(owner: ServerHandle, params: Omit<DialogParams, 'parent'>, parent?: BrowserWindow) {
     super(owner);
@@ -363,14 +375,23 @@ export class DialogHandle extends UIHandle {
     // this, a dialog with no window to sit on opens behind whatever is
     if (!parent) app.focus({ steal: true });
     const shown = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+    this.modal = process.platform === 'darwin' && !parent;
+    if (this.modal) {
+      DialogHandle.modal++;
+      void shown.catch(() => { }).finally(() => {
+        if (--DialogHandle.modal > 0) return;
+        for (const resolve of DialogHandle.waiting.splice(0)) resolve();
+      });
+    }
     shown.then(
       ({ response, checkboxChecked }) => this.dispose({ response, checkboxChecked }),
       error => this.dispose(undefined, String(error)),
     );
   }
 
+  // an app-modal one can't be dismissed - it stays until it's answered
   protected close() {
-    this.dismissed.abort();
+    if (!this.modal) this.dismissed.abort();
   }
 }
 
