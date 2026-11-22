@@ -74,7 +74,7 @@ async function writeSettings(update: SettingsUpdate) {
   }
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temp, JSON.stringify({ ...settings, ...update }, null, 2) + '\n');
+  await fs.writeFile(temp, JSON.stringify({ ...defaultSettings(), ...settings, ...update }, null, 2) + '\n');
   await fs.rename(temp, file);
 }
 
