@@ -6,6 +6,29 @@ import type {
   MessageWriter,
 } from "vscode-jsonrpc";
 
+// every connection rpc-sdk makes, whatever it's over. vscode-jsonrpc
+// rethrows a request's failed write from inside a promise executor, where
+// nothing can catch it - so a request racing its own connection's dispose
+// (its write failing once the transport's gone) would end the process. A
+// write that fails after the connection is disposed is let go instead: the
+// dispose has already rejected whatever was waiting on it. One that fails
+// while it's live still fails.
+export function createConnection(reader: MessageReader, writer: MessageWriter): MessageConnection {
+  let disposed = false;
+  const guarded: MessageWriter = {
+    get onError() { return writer.onError; },
+    get onClose() { return writer.onClose; },
+    write: message => writer.write(message).catch(error => {
+      if (!disposed) throw error;
+    }),
+    end: () => writer.end(),
+    dispose: () => writer.dispose(),
+  };
+  const connection = createMessageConnection(reader, guarded);
+  connection.onDispose(() => { disposed = true; });
+  return connection;
+}
+
 type ReaderCtor<T> = new (input: T) => MessageReader;
 type WriterCtor<T> = new (output: T) => MessageWriter;
 
@@ -20,7 +43,7 @@ export function defineConnection<
   function create(endpoint: TEndpoint): MessageConnection;
   function create(input: TInput, output: TOutput): MessageConnection;
   function create(input: TInput, output: TOutput = input as unknown as TOutput) {
-    return createMessageConnection(
+    return createConnection(
       new Reader(input),
       new Writer(output),
     );
@@ -37,7 +60,7 @@ export function defineSplitConnection<
   Writer: WriterCtor<TOutput>,
 ) {
   return function create(input: TInput, output: TOutput) {
-    return createMessageConnection(
+    return createConnection(
       new Reader(input),
       new Writer(output),
     );
@@ -53,7 +76,7 @@ export function defineDuplexConnection<
   Writer: WriterCtor<TOutput>,
 ) {
   return function create(endpoint: TEndpoint) {
-    return createMessageConnection(
+    return createConnection(
       new Reader(endpoint),
       new Writer(endpoint),
     );

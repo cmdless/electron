@@ -1,6 +1,6 @@
 import { chmodSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { createServer, createConnection, type Server, type ListenOptions, type NetConnectOpts } from "node:net";
+import { createServer, createConnection, type Server, type ListenOptions, type NetConnectOpts, type Socket } from "node:net";
 import { defineDuplexConnection, defineConnection } from "../connections.js";
 import {
   MessageConnection,
@@ -20,7 +20,14 @@ export const createStream = defineConnection(StreamMessageReader, StreamMessageW
 
 export const createStdio = () => createStream(process.stdin, process.stdout);
 
-export const createSocket = defineDuplexConnection(SocketMessageReader, SocketMessageWriter);
+const socketConnection = defineDuplexConnection(SocketMessageReader, SocketMessageWriter);
+
+// a socket's connection - on a socket whose errors never take the process
+// down: one can still fail once the connection has stopped listening for them
+export function createSocket(socket: Socket) {
+  socket.on('error', () => { });
+  return socketConnection(socket);
+}
 
 export const createIPC = defineDuplexConnection(IPCMessageReader, IPCMessageWriter);
 

@@ -97,7 +97,8 @@ export type TrayMenuItem =
   | { type: 'separator' };
 
 // a tray icon: the image to show (a file; on macOS, a name ending in
-// "Template" makes it follow the menu bar's colors), and its menu
+// "Template" makes it follow the menu bar's colors - or an empty string for
+// the runtime's own), and its menu
 export type TrayParams = {
   icon: string;
   tooltip?: string;

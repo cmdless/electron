@@ -1,23 +1,14 @@
-import os from 'node:os';
-import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getAppDataPath, isPendingService, listenExclusive, rejectService, resolveService } from '@cmdless/core/node';
+import { isPendingService, listenExclusive, rejectService, resolveService } from '@cmdless/core/node';
 import type { DaemonService } from '@cmdless/core/node';
 import { memory } from '@cmdless/rpc-sdk';
 import { createSocketServer, file } from '@cmdless/rpc-sdk/node';
 import { dropboxApp, getPeerlinkSocketPath, peerlinkProtocol } from '@cmdless/peerlink-sdk/node';
-import type { AccountState, OfferParams, SettingsState, SettingsUpdate } from '@cmdless/peerlink-sdk';
+import type { AccountState, OfferParams } from '@cmdless/peerlink-sdk';
 import { ensureAuth, providerKey } from '@cmdless/auth-sdk/node';
-import { createSync, DEFAULT_HEARTBEAT_SECONDS } from './sync.js';
-
-const dataPath = getAppDataPath('peerlink');
-
-const defaultSettings = (): SettingsState => ({
-  deviceId: crypto.randomUUID(),
-  deviceName: os.hostname(),
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-  heartbeatSeconds: DEFAULT_HEARTBEAT_SECONDS,
-});
+import { createSync } from './sync.js';
+import { defaultSettings, settingsPath, validSettings } from './settings.js';
+import { showTrayWhileSet } from './tray.js';
 
 // what a client sent, checked before it becomes an offer
 function validOffer({ kind, name, address }: OfferParams): OfferParams {
@@ -27,24 +18,12 @@ function validOffer({ kind, name, address }: OfferParams): OfferParams {
   return { kind, name, address };
 }
 
-function validSettings(update: SettingsUpdate): SettingsUpdate {
-  const { deviceName, iceServers, heartbeatSeconds } = update;
-  if (deviceName !== undefined && !deviceName.trim()) throw new Error('a device name can\'t be empty');
-  if (iceServers !== undefined && !iceServers.every(server => server?.urls)) throw new Error('every ICE server needs urls');
-  if (heartbeatSeconds !== undefined && !(heartbeatSeconds >= 15)) throw new Error('a heartbeat must be at least 15 seconds');
-  return {
-    ...(deviceName !== undefined && { deviceName }),
-    ...(iceServers !== undefined && { iceServers }),
-    ...(heartbeatSeconds !== undefined && { heartbeatSeconds }),
-  };
-}
-
 async function main() {
   const createPeerlinkHost = peerlinkProtocol.defineHost({
     state: {
-      host: memory({ pid: process.pid, status: 'starting' }),
+      host: memory({ pid: process.pid, status: 'starting', tray: 'off' }),
       offers: memory({}),
-      settings: file(path.join(dataPath, 'settings.json'), { default: defaultSettings() }),
+      settings: file(settingsPath(), { default: defaultSettings() }),
       account: memory<AccountState>({ status: 'signed-out' }),
       devices: memory({}),
     },
@@ -71,6 +50,8 @@ async function main() {
       });
       server.onRequest.signIn(() => signIn());
       server.onRequest.signOut(() => signOut());
+      // answered before it goes, so whoever asked hears it worked
+      server.onRequest.stop(() => { setImmediate(() => void stop()); });
       server.onClose(() => { void withdraw(leased); });
     },
   });
@@ -147,6 +128,9 @@ async function main() {
   store.watch('offers', () => sync.changed());
   store.watch('settings', () => sync.changed());
 
+  // a tray while the setting says so
+  const tray = showTrayWhileSet(store, { signIn, signOut, stop: () => stop() });
+
   let stopping = false;
   const stop = async () => {
     if (stopping) return;
@@ -154,6 +138,7 @@ async function main() {
     // tells the other devices this one is gone, rather than leaving them to
     // notice the heartbeat stop - but never holds up shutting down for long
     await Promise.race([sync.stop(true), new Promise(resolve => setTimeout(resolve, 3_000))]);
+    tray.dispose();
     auth.dispose();
     lock.close();
     process.exit(0);
