@@ -1,8 +1,7 @@
 import { advertisementPath, createDropbox, DropboxError, watchDevices } from '@cmdless/peerlink-sdk';
 import type { Advertisement, Device, LinkTarget, Offer, SettingsState } from '@cmdless/peerlink-sdk';
 import { answerLinks } from './links.js';
-
-export const DEFAULT_HEARTBEAT_SECONDS = 60;
+import { DEFAULT_HEARTBEAT_SECONDS } from './settings.js';
 
 type SyncOptions = {
   getToken: (retry: boolean) => Promise<string>;

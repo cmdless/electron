@@ -31,6 +31,8 @@ export type SettingsState = {
   // how often this device's advertisement is rewritten while nothing
   // changes - a device is offline once it misses three
   heartbeatSeconds: number;
+  // whether the daemon shows a tray, whoever started it
+  tray: boolean;
 };
 
 // /devices/<deviceId>.json in the Dropbox app folder: what this device
@@ -73,6 +75,10 @@ export type AccountState = {
 export type HostState = {
   pid: number;
   status: 'starting' | 'ready';
+  // the tray, as the tray setting has it shown or not - and why it isn't,
+  // if it couldn't be
+  tray: 'off' | 'starting' | 'shown' | 'error';
+  trayError?: string;
 };
 
 export type OfferParams = Omit<Offer, 'id'>;
@@ -92,6 +98,8 @@ export const peerlinkProtocol = defineProtocol(({ side, request, state }) => ({
       signIn: request<void, void>('account/sign-in'),
       // stops syncing, marks this device offline, and signs out of Dropbox
       signOut: request<void, void>('account/sign-out'),
+      // marks this device offline and ends the daemon, tray and all
+      stop: request<void, void>('host/stop'),
     },
   }),
   state: {
