@@ -196,7 +196,11 @@ export function serveStore<S extends Record<string, unknown>>(connection: Messag
   // watch could send, and a synchronous handler's answer is written at once
   connection.onRequest(subscribeType, ({ channel }) => {
     unsubscribe(channel);
-    const watch = store.watch(channel, patch => connection.sendNotification(patchType, { channel, ...patch }));
+    // a patch to a connection that's going (closed, not yet noticed) just
+    // never arrives - the close takes the watch away
+    const watch = store.watch(channel, patch => {
+      connection.sendNotification(patchType, { channel, ...patch }).catch(() => { });
+    });
     watches.set(channel, watch.dispose);
     return { state: watch.state, seq: watch.seq };
   });

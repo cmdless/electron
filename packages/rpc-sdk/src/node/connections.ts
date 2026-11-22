@@ -1,6 +1,6 @@
 import { chmodSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { createServer, createConnection, type Server, type ListenOptions, type NetConnectOpts } from "node:net";
+import { createServer, createConnection, type Server, type ListenOptions, type NetConnectOpts, type Socket } from "node:net";
 import { defineDuplexConnection, defineConnection } from "../connections.js";
 import {
   MessageConnection,
@@ -20,7 +20,26 @@ export const createStream = defineConnection(StreamMessageReader, StreamMessageW
 
 export const createStdio = () => createStream(process.stdin, process.stdout);
 
-export const createSocket = defineDuplexConnection(SocketMessageReader, SocketMessageWriter);
+const socketConnection = defineDuplexConnection(SocketMessageReader, SocketMessageWriter);
+
+// a socket's connection - on a socket that never takes its process down.
+// vscode-jsonrpc rethrows a request's failed write from inside a promise
+// executor, where nothing can catch it, so a request racing its own
+// connection's dispose would end the process: a write to a socket that's
+// already destroyed is dropped instead - it was lost either way, and the
+// request is still rejected. And a socket can still fail once the
+// connection has stopped listening for its errors.
+export function createSocket(socket: Socket) {
+  const write = socket.write.bind(socket) as (...args: unknown[]) => boolean;
+  socket.write = ((...args: unknown[]) => {
+    if (!socket.destroyed) return write(...args);
+    const callback = args.find(arg => typeof arg === 'function') as (() => void) | undefined;
+    if (callback) process.nextTick(callback);
+    return false;
+  }) as Socket['write'];
+  socket.on('error', () => { });
+  return socketConnection(socket);
+}
 
 export const createIPC = defineDuplexConnection(IPCMessageReader, IPCMessageWriter);
 
