@@ -14,7 +14,7 @@ export const defaultSettings = (): SettingsState => ({
   deviceName: os.hostname(),
   iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
   heartbeatSeconds: DEFAULT_HEARTBEAT_SECONDS,
-  tray: false,
+  tray: true,
 });
 
 // a settings change, checked - only what it gives

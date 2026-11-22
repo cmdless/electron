@@ -61,7 +61,8 @@ export function showTrayWhileSet(store: PeerlinkStore, actions: TrayActions) {
 
   function apply() {
     applying = applying.then(async () => {
-      const wanted = store.state.settings.tray === true;
+      // on unless it's been turned off
+      const wanted = store.state.settings.tray !== false;
       if (wanted && !host) await show();
       else if (!wanted && host) {
         hide();

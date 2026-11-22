@@ -66,6 +66,8 @@ async function main() {
     return;
   }
 
+  // a settings.json from before a setting existed gets its default for it
+  await store.update('settings', settings => ({ ...defaultSettings(), ...settings }));
   await store.update('host', host => { host.status = 'ready'; });
 
   // Dropbox, through the auth broker: syncs whenever the broker holds a
