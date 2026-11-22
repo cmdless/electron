@@ -1,6 +1,6 @@
 import '#ral'; // installs vscode-jsonrpc's runtime layer for whichever environment this runs in
 import { toSocket, WebSocketMessageReader, WebSocketMessageWriter, type IWebSocket } from 'vscode-ws-jsonrpc';
-import { createMessageConnection } from 'vscode-jsonrpc';
+import { createConnection } from '../connections.js';
 import type { EitherWebSocket } from './shared.js';
 import type { ClientOf, ClientProtocol } from '../protocol.js';
 
@@ -34,7 +34,7 @@ export function createWebSocket(socket: EitherWebSocket) {
 // a connection over anything shaped like vscode-ws-jsonrpc's socket - a
 // WebSocket someone else holds and passes messages through, say
 export function createSocketConnection(adapted: IWebSocket) {
-  const connection = createMessageConnection(
+  const connection = createConnection(
     new WebSocketMessageReader(adapted),
     new WebSocketMessageWriter(adapted),
   );
