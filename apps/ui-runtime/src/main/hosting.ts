@@ -466,8 +466,11 @@ export class NotificationHandle extends UIHandle {
   }
 }
 
+// the icon a tray gets when it's given none (an empty string)
+const DEFAULT_TRAY_ICON = fileURLToPath(new URL('../../resources/trayTemplate.png', import.meta.url));
+
 function trayImage(icon: string) {
-  const image = nativeImage.createFromPath(icon);
+  const image = nativeImage.createFromPath(icon || DEFAULT_TRAY_ICON);
   if (image.isEmpty()) throw new Error(`no image at ${icon}`);
   return image;
 }
