@@ -89,30 +89,39 @@ export function showTrayWhileSet(store: PeerlinkStore, actions: TrayActions) {
     const own = Object.values(offers);
     const offerItem = ({ kind, name }: { kind: string; name: string }, index: number): TrayMenuItem =>
       ({ id: `offer-${index}`, label: `${name} (${kind})`, enabled: false });
+    // an error is a sync failing - still signed in
+    const signedIn = account.status === 'syncing' || account.status === 'error';
     return [
-      { id: 'device', label: `peerlink - ${settings.deviceName}`, enabled: false },
-      { id: 'account', label: accountLabel(account), enabled: false },
-      // an error is a sync failing - still signed in
-      account.status === 'signed-out' || account.status === 'signing-in'
-        ? { id: 'sign-in', label: 'Sign in to Dropbox...', enabled: account.status === 'signed-out' }
-        : { id: 'sign-out', label: 'Sign Out' },
-      { type: 'separator' },
+      // where the storage provider's account lives - Dropbox, for now
       {
-        type: 'submenu', label: `Devices (${others.filter(device => device.online).length} online)`, submenu: others.length
-          ? others.map(device => ({
-            type: 'submenu' as const,
-            label: `${device.online ? '●' : '○'} ${device.name}`,
-            submenu: Object.values(device.offers).length
-              ? Object.values(device.offers).map(offerItem)
-              : [{ id: 'none', label: 'Offers nothing', enabled: false }],
-          }))
-          : [{ id: 'none', label: 'No other devices', enabled: false }],
+        type: 'submenu', label: 'Account', submenu: [
+          { id: 'device', label: `peerlink - ${settings.deviceName}`, enabled: false },
+          { type: 'separator' },
+          { id: 'account', label: accountLabel(account), enabled: false },
+          signedIn
+            ? { id: 'sign-out', label: 'Sign Out' }
+            : { id: 'sign-in', label: 'Sign In', enabled: account.status === 'signed-out' },
+        ],
       },
-      {
-        type: 'submenu', label: `Offering (${own.length})`, submenu: own.length
-          ? own.map(offerItem)
-          : [{ id: 'none', label: 'Nothing', enabled: false }],
-      },
+      // what's there to see only once signed in
+      ...signedIn ? [
+        {
+          type: 'submenu' as const, label: `Devices (${others.filter(device => device.online).length} online)`, submenu: others.length
+            ? others.map(device => ({
+              type: 'submenu' as const,
+              label: `${device.online ? '●' : '○'} ${device.name}`,
+              submenu: Object.values(device.offers).length
+                ? Object.values(device.offers).map(offerItem)
+                : [{ id: 'none', label: 'Offers nothing', enabled: false }],
+            }))
+            : [{ id: 'none', label: 'No other devices', enabled: false }],
+        },
+        {
+          type: 'submenu' as const, label: `Offering (${own.length})`, submenu: own.length
+            ? own.map(offerItem)
+            : [{ id: 'none', label: 'Nothing', enabled: false }],
+        },
+      ] : [],
       { type: 'separator' },
       { id: 'quit', label: 'Quit peerlink' },
     ];

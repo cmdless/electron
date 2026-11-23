@@ -16,7 +16,7 @@ Only `start` starts the daemon. The rest work on whatever's running, and `sign-i
 
 ## The tray
 
-Whether the daemon shows a tray is the `tray` setting — on unless it's been set to `false`, in a new `settings.json` or one from before the setting existed — so it's the same however the daemon was started — by `peerlink start`, or by a program offering itself. Changing it on a running daemon shows or takes away the tray at once. The tray is on a throwaway UI host of its own, so it never meets another app's, and its menu shows only what's in the daemon's state: the account, the other devices and what each offers, and what this device offers. The host state's `tray` says whether it's `off`, `starting`, `shown` or in `error` (with `trayError`) — no display, say, which leaves the daemon running without one.
+Whether the daemon shows a tray is the `tray` setting — on unless it's been set to `false`, in a new `settings.json` or one from before the setting existed — so it's the same however the daemon was started — by `peerlink start`, or by a program offering itself. Changing it on a running daemon shows or takes away the tray at once. The tray is on a throwaway UI host of its own, so it never meets another app's, and its menu shows only what's in the daemon's state: the device and its Dropbox account (with signing in and out) under **Account**, and — once signed in — the other devices and what each offers, and what this device offers. The host state's `tray` says whether it's `off`, `starting`, `shown` or in `error` (with `trayError`) — no display, say, which leaves the daemon running without one.
 
 ## State
 
