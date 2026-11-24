@@ -374,6 +374,7 @@ async function scanOwn(ghToken: string): Promise<{ changed: boolean; status: Par
   const scanned = await inbox.scan(ghToken, config.autoMarkDone);
   if (scanned.markedDone > 0) log(`marked ${scanned.markedDone} finished notification(s) done`);
   if (scanned.markDoneError) log(`couldn't mark some notifications done: ${scanned.markDoneError}`);
+  if (scanned.searchError) log(`couldn't search for review requests: ${scanned.searchError}`);
   pollSeconds = scanned.pollSeconds;
   mine = scanned.items;
   const changed = await own.write(mine);
@@ -535,7 +536,11 @@ tray.onEvent(event => {
   if (event.event !== 'menu-item') return;
   const { item } = event;
   if (item === 'quit') return void leave();
-  if (item === 'refresh' || item === 'gh-check') return void operation(() => refresh(true));
+  // Check now searches for review requests too - polls only read the inbox
+  if (item === 'refresh' || item === 'gh-check') {
+    inbox.search();
+    return void operation(() => refresh(true));
+  }
   if (item === 'gh-download') return void host.shell.openExternal(GH_DOWNLOAD);
   if (item === 'sign-in') return void signIn();
   if (item === 'notification-settings') return void host.shell.openExternal(NOTIFICATION_SETTINGS);

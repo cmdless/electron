@@ -1,4 +1,4 @@
-import type { GitHub } from './github.js';
+import type { Answer, GitHub } from './github.js';
 import type { DeploymentItem, Environment, Item, PullRequestItem } from './files.js';
 
 // how long to wait between polls when GitHub doesn't say
@@ -28,13 +28,17 @@ type PullRequest = {
 };
 
 type Review = { user: { login: string } | null; state: string };
+type SearchResult = { items: { pull_request?: { url: string } }[] };
 type Commit = { author: { login: string } | null };
 type Rule = { type: string; parameters?: { require_last_push_approval?: boolean } };
 type Run = { id: number; run_number: number; name: string; display_title: string; html_url: string };
 type PendingDeployment = { environment: { id: number; name: string }; current_user_can_approve: boolean };
 
 // What's waiting on a user, from their inbox: the pull requests their review
-// is requested on, and the deployments waiting on their approval.
+// is requested on, and the deployments waiting on their approval - and, from a
+// search, the pull requests waiting on their review that never made it to the
+// inbox (requested before they read their inbox, say, or with notifications
+// going elsewhere).
 //
 // The inbox says what there is to look at; each one's own state says whether
 // it's still waiting. What's waiting is looked at again every scan, to see it
@@ -60,6 +64,17 @@ export class Inbox {
   private forgetting = false;
   forget() {
     this.forgetting = true;
+  }
+
+  // the pull requests a search found waiting on the user - looked at every
+  // scan, like what's waiting in the inbox, until they aren't waiting. The
+  // search itself is only run when asked for (it has a rate limit of its
+  // own, and may not be free when nothing's changed): on the first scan, and
+  // the one after search() - Check now.
+  private searched = new Set<string>();
+  private searching = true;
+  search() {
+    this.searching = true;
   }
 
   // markDone: notifications whose work is over are marked done, so the inbox
@@ -97,8 +112,25 @@ export class Inbox {
         note(repoKey(repository.full_name), id, updated_at);
       }
     }
+    // what a search finds waiting, if one's due - a search that fails keeps
+    // what the last one found, and is tried again next time
+    let searchError: string | undefined;
+    let searched = this.searched;
+    if (this.searching) {
+      this.searching = false;
+      try {
+        searched = new Set(await searchWaiting(github, token, orgs));
+      } catch (error) {
+        this.searching = true;
+        searchError = (error as Error).message;
+      }
+    }
+
     const moved = (key: string) => before.get(key) !== seen.get(key);
-    const pullUrls = [...pullCandidates].filter(url => this.waitingPulls.has(url) || moved(url));
+    const pullUrls = [...new Set([
+      ...[...pullCandidates].filter(url => this.waitingPulls.has(url) || moved(url)),
+      ...searched,
+    ])];
     const deploymentRepos = [...repoCandidates].filter(repo => this.waitingRepos.has(repo) || moved(repoKey(repo)));
 
     const rules = new Map<string, Promise<boolean>>();
@@ -132,11 +164,28 @@ export class Inbox {
     this.seen = seen;
     this.waitingPulls = new Set(open.map(({ url }) => url));
     this.waitingRepos = new Set(deployments.flat().map(item => item.repo));
-    for (const url of this.othersOnly.keys()) if (!pullCandidates.has(url)) this.othersOnly.delete(url);
+    // what the search found stops being looked at once it isn't waiting
+    this.searched = new Set([...searched].filter(url => this.waitingPulls.has(url)));
+    for (const url of this.othersOnly.keys())
+      if (!pullCandidates.has(url) && !this.searched.has(url)) this.othersOnly.delete(url);
 
     const items: Item[] = [...open.map(({ pull }) => pull), ...deployments.flat()];
-    return { items, pollSeconds: pollInterval ?? DEFAULT_POLL_SECONDS, markedDone, markDoneError };
+    return { items, pollSeconds: pollInterval ?? DEFAULT_POLL_SECONDS, markedDone, markDoneError, searchError };
   }
+}
+
+// the open pull requests waiting on the user's review, by API URL - asked of
+// the search, in the given owners' repositories if there are any
+async function searchWaiting(github: GitHub, token: string, orgs: string[]) {
+  const query = ['is:pr', 'is:open', 'draft:false', 'archived:false', 'review-requested:@me', ...orgs.map(org => `org:${org}`)].join(' ');
+  const urls: string[] = [];
+  let next: string | undefined = `/search/issues?q=${encodeURIComponent(query)}&per_page=100`;
+  while (next) {
+    const page: Answer<SearchResult> = await github.get<SearchResult>(token, next);
+    for (const item of page.body.items) if (item.pull_request) urls.push(item.pull_request.url);
+    next = page.next;
+  }
+  return urls;
 }
 
 // a pull request the inbox says the user's review was requested on - if it's
