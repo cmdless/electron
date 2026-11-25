@@ -23,8 +23,11 @@ const USAGE = `usage: peerlink <command>
   sign-out                     sign out of the provider (Dropbox)
   set <setting> <value>        change a setting: name, heartbeat (seconds),
                                or tray (true or false)
-  set provider dropbox [key]   sync through Dropbox - peerlink's own app, or
-                               yours by its app key
+  set provider dropbox [<key> [<redirect>]]
+                               sync through Dropbox - peerlink's own app, or
+                               yours: its app key, and a redirect URI
+                               registered for it (http://localhost/cmdless-auth
+                               if it's left out)
   set provider folder <path>   sync through a folder every device can write
                                to, such as a synced one
 
@@ -53,11 +56,17 @@ const read = async <T>(channel: { subscribe: (listener: (state: T) => void) => P
 };
 
 // a setting as the command line gives it
-function settingFrom([name, value, extra]: string[]): SettingsUpdate {
+function settingFrom([name, value, extra, more]: string[]): SettingsUpdate {
   if (name === undefined || value === undefined) throw new Error('set takes a setting and a value');
   switch (name) {
     case 'provider':
-      if (value === 'dropbox') return validSettings({ provider: { kind: 'dropbox', ...(extra !== undefined && { appKey: extra }) } });
+      if (value === 'dropbox') return validSettings({
+        provider: {
+          kind: 'dropbox',
+          ...(extra !== undefined && { appKey: extra }),
+          ...(more !== undefined && { redirectUri: more }),
+        },
+      });
       if (value === 'folder') {
         if (extra === undefined) throw new Error('set provider folder takes the folder');
         return validSettings({ provider: { kind: 'folder', path: path.resolve(extra) } });
@@ -117,8 +126,12 @@ async function main() {
     case 'stop': {
       const peerlink = await running();
       if (!peerlink) return console.log('peerlink isn\'t running');
+      // stopped once it's gone - its hanging up - not once it's agreed to,
+      // so a start straight after doesn't find it still there
+      const gone = new Promise<void>(resolve => peerlink.onClose(resolve));
       try {
         await peerlink.request.stop();
+        await gone;
       } finally {
         peerlink.dispose();
       }
@@ -161,7 +174,7 @@ async function main() {
       } else {
         const { provider } = await readSettings();
         if (provider.kind !== 'dropbox') throw new Error(`${providerLabel(provider)} has no account to sign ${command === 'sign-in' ? 'in to' : 'out of'}`);
-        const app = dropboxApp(provider.appKey);
+        const app = dropboxApp(provider.appKey, provider.redirectUri);
         const broker = await auth();
         try {
           if (command === 'sign-in') await broker.request.getToken({ provider: app, interactive: true });

@@ -40,6 +40,10 @@ function validProvider(provider: ProviderSettings) {
     case 'dropbox':
       if (provider.appKey !== undefined && (typeof provider.appKey !== 'string' || !provider.appKey.trim()))
         throw new Error('a Dropbox app key can\'t be empty');
+      if (provider.redirectUri !== undefined) {
+        if (provider.appKey === undefined) throw new Error('a redirect URI goes with an app key');
+        if (!URL.canParse(provider.redirectUri)) throw new Error(`${provider.redirectUri} isn't a URL`);
+      }
       return;
     case 'folder':
       if (typeof provider.path !== 'string' || !path.isAbsolute(provider.path))

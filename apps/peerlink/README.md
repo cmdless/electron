@@ -11,7 +11,7 @@ The peerlink daemon: it advertises what this device offers to the other devices 
 | `peerlink status` | Prints the daemon's state as JSON (addresses left out), or `{ "running": false }` with exit code 1. |
 | `peerlink sign-in` / `sign-out` | Signs in to or out of the provider's account — Dropbox's; a folder has none. |
 | `peerlink set <setting> <value>` | Changes `name`, `heartbeat` (seconds, at least 15) or `tray` (`true` or `false`). |
-| `peerlink set provider dropbox [app key]` | Syncs through Dropbox: peerlink's own app, or yours by its app key. |
+| `peerlink set provider dropbox [<app key> [<redirect URI>]]` | Syncs through Dropbox: peerlink's own app, or yours by its app key and one of its registered redirect URIs. |
 | `peerlink set provider folder <path>` | Syncs through a folder (a relative path is taken from where you are). |
 
 Only `start` starts the daemon. The rest work on whatever's running, and `sign-in`, `sign-out` and `set` work without it too: the sign-in is the auth broker's, which a daemon started later picks up, and a setting goes into `settings.json` for the next start.
@@ -20,7 +20,7 @@ Only `start` starts the daemon. The rest work on whatever's running, and `sign-i
 
 The provider is what carries each device's advertisement and the WebRTC offers and answers between devices; the daemon uses one at a time, the `provider` setting's. Devices see each other when they're on the same one. Changing it on a running daemon marks this device offline on the old one and moves to the new one.
 
-- **Dropbox** (the default) — everything goes in the Dropbox app's own App folder, so it's devices signed in to the same Dropbox *account* through the same *app*. Without an app key it's peerlink's own app. An app of your own needs `http://localhost/cmdless-auth` as a redirect URI (where the auth broker takes the sign-in back) and App folder access; each app key is its own sign-in.
+- **Dropbox** (the default) — everything goes in the Dropbox app's own App folder, so it's devices signed in to the same Dropbox *account* through the same *app*. Without an app key it's peerlink's own app. An app of your own needs App folder access, and is given with one of its registered redirect URIs — any of them: nothing has to answer there, since the sign-in window catches the redirect before it's requested. Left out, it's `http://localhost/cmdless-auth`. Dropbox has no way to look an app's redirect URIs up, so it has to be given. Each app key is its own sign-in.
 - **Folder** — a folder every device can write to, such as one OneDrive, Dropbox or another sync client keeps in step across machines. There's no account: whoever can write the folder is in the group. Changes are noticed through the OS's file events, so a network share that doesn't send them won't work, and a sync client adds its own delay — a few seconds, which signaling doesn't mind.
 
 Both lay it out the same way: `devices/<deviceId>.json` for each advertisement, and `signal/<deviceId>/<sessionId>.offer.json` with its `.answer.json` beside it for each connection, removed once it's up. Providers are `SignalingProvider`s in `@cmdless/peerlink-sdk` — the interface is presence and offers and answers, not files, so a provider can carry them however it likes.

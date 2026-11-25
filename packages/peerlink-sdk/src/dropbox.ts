@@ -7,17 +7,20 @@ import type { FileChange, SignalFiles, SignalingProvider } from './providers.js'
 // peerlink's own Dropbox app - its key is public, as PKCE allows
 export const DROPBOX_APP_KEY = '6bvilhwtvusnqaa';
 
-// a Dropbox app to sign in to: peerlink's own, or one of yours (its app key).
-// An app of yours needs http://localhost/cmdless-auth as a redirect URI -
-// where the auth broker takes the sign-in back - and an App folder of its
-// own, which is where everything goes: only devices signed in to the same
-// Dropbox account through the same app see each other.
-export const dropboxApp = (appKey = DROPBOX_APP_KEY) => ({
+// where peerlink's own app sends a sign-in back
+export const DROPBOX_REDIRECT_URI = 'http://localhost/cmdless-auth';
+
+// a Dropbox app to sign in to: peerlink's own, or one of yours - its app key,
+// and one of the redirect URIs registered for it. Nothing has to answer at
+// that URI: the sign-in window catches the redirect before it's requested.
+// Everything goes in the app's own App folder, so only devices signed in to
+// the same Dropbox account through the same app see each other.
+export const dropboxApp = (appKey = DROPBOX_APP_KEY, redirectUri = DROPBOX_REDIRECT_URI) => ({
   id: 'dropbox',
   authorizeUrl: 'https://www.dropbox.com/oauth2/authorize',
   tokenUrl: 'https://api.dropboxapi.com/oauth2/token',
   clientId: appKey,
-  redirectUri: 'http://localhost/cmdless-auth',
+  redirectUri,
   extraParams: { token_access_type: 'offline' },
 });
 
