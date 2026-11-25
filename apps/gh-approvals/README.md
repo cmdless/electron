@@ -28,9 +28,18 @@ Every request is conditional on what GitHub answered last, kept in `github-cache
 {data}/{user}/deployments/{owner}/{repo}/{runId}.json
 ```
 
-Each tray writes only its own user's folder, and reads everyone else's to list them under **Users**. `user.json` holds a token, where the tray listens (`host`, `port`), and when its files last changed — so the others only re-read a folder when it has. Anyone who can read the folder can reach every running tray; the folder is the trust.
+Each tray writes only its own user's folder, and reads everyone else's. `user.json` holds a token, where the tray listens (`host`, `port`), and when its files last changed — so the others only re-read a folder when it has. Anyone who can read the folder can reach every running tray; the folder is the trust.
 
-A tray listens on a free port while it's signed in. **Check now** — here or in anyone's tray — asks every running tray to refresh, and a tray whose files changed asks again, so everyone sees it. Refreshes run one at a time, with one more queued at most. From **Users** you can ask a tray to refresh, approve its user's items with your own account, or **Send To** someone a pull request only they can approve.
+A tray listens on a free port while it's signed in, and keeps a connection open to every other running tray, made once for each `user.json` and opened with its token. Someone is listed under **Users** only while that connection is open: a tray that quits hangs up on everyone, and one whose machine sleeps or drops off is noticed by TCP keepalive. A tray that couldn't be reached isn't tried again until its `user.json` changes, as it does when it restarts.
+
+**Check now** — here or in anyone's tray — asks every connected tray to refresh, and a tray whose files changed asks again, so everyone sees it. Refreshes run one at a time, with one more queued at most.
+
+Each item opens with **View in Browser…**. Your own items have **Auto Approve** under it, with your account. Someone else's have:
+
+- **Request Approval** — a notification in their tray; clicking it opens the item.
+- **Auto Approve** — their tray approves it with *their* account, saying "Auto approved by {them} on behalf of {you}", and tells them it did.
+
+A deployment is approved one environment at a time. A pull request marked `*` was last pushed by whoever it's waiting on, so their approval won't count, and **Auto Approve** is off for it. **Request Refresh** in a user's menu asks just their tray to look again.
 
 ## Elsewhere in userData
 
