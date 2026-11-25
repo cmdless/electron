@@ -28,7 +28,7 @@ export const peerProtocol = defineProtocol(({ side, request }) => ({
     requests: {
       // first, and once: who's connecting, with the token
       hello: request<{ token: string; from: string }>('hello'),
-      // look again, now: someone pressed Check now, or changed their files
+      // look again, now: someone pressed Check Now, or changed their files
       refresh: request<void>('refresh'),
       // tell its user someone wants them to approve one of their items
       requestApproval: request<{ item: SentItem }>('request-approval'),

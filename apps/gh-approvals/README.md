@@ -14,9 +14,9 @@ gh-approvals --user <github login> [--data <folder>] [--org <owner>]...
 
 The inbox (`notifications?all=true&is_done=false`) says what there is to look at: review requests and deployment approval requests. Each one's own state says whether it's still waiting — a pull request still open and requested of you (or of your team, and not approved by you since), a run still waiting on an environment you can approve. Done items are only looked at again once their notification moves.
 
-Review requests that never reached the inbox — made before you read it this way, or with notifications going elsewhere — come from a search (`is:pr is:open review-requested:@me`, in the `--org` owners if given). The search has a rate limit of its own and may not be free while nothing changes, so it runs only at start and on **Check now**. What it finds is then looked at every refresh, like anything else waiting, until it isn't.
+Review requests that never reached the inbox — made before you read it this way, or with notifications going elsewhere — come from a search (`is:pr is:open review-requested:@me`, in the `--org` owners if given). The search has a rate limit of its own and may not be free while nothing changes, so it runs only at start and on **Check Now**. What it finds is then looked at every refresh, like anything else waiting, until it isn't.
 
-Every request is conditional on what GitHub answered last, kept in `github-cache.json` in userData, so an unchanged answer (304) costs nothing against the rate limit. It polls as often as the inbox asks (`X-Poll-Interval`, usually a minute); **Logged in as … › Quota** shows what the last refresh cost and what's left this hour.
+Every request is conditional on what GitHub answered last, kept in `github-cache.json` in userData, so an unchanged answer (304) costs nothing against the rate limit. It polls as often as the inbox asks (`X-Poll-Interval`, usually a minute). **Check Now** shows what's left of the rate limit this hour and what the last refresh cost: `Check Now (4,980 / 5,000, last 1 (16))` is 4,980 of 5,000 left, and 1 of the last refresh's 16 requests counted.
 
 **Automatically Mark as Done** (off by default) marks a merged pull request's notification done, and a repository's approval requests once nothing there is waiting on you.
 
@@ -32,7 +32,7 @@ Each tray writes only its own user's folder, and reads everyone else's. `user.js
 
 A tray listens on a free port while it's signed in, and keeps a connection open to every other running tray, made once for each `user.json` and opened with its token. Someone is listed under **Users** only while that connection is open: a tray that quits hangs up on everyone, and one whose machine sleeps or drops off is noticed by TCP keepalive. A tray that couldn't be reached isn't tried again until its `user.json` changes, as it does when it restarts.
 
-**Check now** — here or in anyone's tray — asks every connected tray to refresh, and a tray whose files changed asks again, so everyone sees it. Refreshes run one at a time, with one more queued at most.
+**Check Now** — here or in anyone's tray — asks every connected tray to refresh, and a tray whose files changed asks again, so everyone sees it. Refreshes run one at a time, with one more queued at most.
 
 Each item opens with **View in Browser…**. Your own items have **Auto Approve** under it, with your account. Someone else's have:
 

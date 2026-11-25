@@ -144,13 +144,15 @@ let listener: Awaited<ReturnType<typeof listen>> | undefined;
 let token = '';
 let endpoint = { host: os.hostname(), port: 0 };
 
-// GitHub's rate limit: what's left of it this hour (of how much), and what
-// the last refresh cost (of how many requests it made)
-function quotaLabel() {
+// Check Now, with GitHub's rate limit beside it: what's left this hour of
+// how much, and what the last refresh cost of how many requests it made
+function checkNowLabel() {
   const { lastRefresh, rateLimit } = config;
-  const total = rateLimit ? `${rateLimit.remaining.toLocaleString()} (${rateLimit.limit.toLocaleString()})` : '?';
-  const last = lastRefresh ? `${lastRefresh.quotaCosting} (${lastRefresh.requests})` : '?';
-  return `Quota - total: ${total}, last: ${last}`;
+  const parts = [
+    ...rateLimit ? [`${rateLimit.remaining.toLocaleString()} / ${rateLimit.limit.toLocaleString()}`] : [],
+    ...lastRefresh ? [`last ${lastRefresh.quotaCosting} (${lastRefresh.requests})`] : [],
+  ];
+  return parts.length ? `Check Now (${parts.join(', ')})` : 'Check Now';
 }
 
 function menu(): TrayMenuItem[] {
@@ -227,7 +229,6 @@ function menu(): TrayMenuItem[] {
       ? {
         type: 'submenu', label: `Logged in as ${user}`, enabled: !busy, submenu: [
           { id: 'listening', label: `Listening on ${endpoint.host}:${endpoint.port}...`, enabled: false },
-          { id: 'quota', label: quotaLabel(), enabled: false },
           { type: 'separator' },
           { id: 'notification-settings', label: 'Notification settings...' },
           { id: 'notifications', label: 'Notifications...' },
@@ -240,7 +241,7 @@ function menu(): TrayMenuItem[] {
         ? { id: 'signing-in', label: `Logging in to GitHub (${user})…`, enabled: false }
         : { id: 'sign-in', label: `Login to GitHub (${user})...`, enabled: !busy }] satisfies TrayMenuItem[]),
     // at the top, so refreshing is always right there
-    { id: 'refresh', label: 'Check now', enabled: usable },
+    { id: 'refresh', label: checkNowLabel(), enabled: usable },
     { type: 'separator' },
     ...(online ? [
       {
@@ -451,7 +452,7 @@ async function scanOwn(ghToken: string): Promise<{ changed: boolean; status: Par
   };
 }
 
-// looks at everyone's folders and this user's inbox. Asked for by Check now
+// looks at everyone's folders and this user's inbox. Asked for by Check Now
 // (here or anywhere), it asks every other tray to as well; otherwise it only
 // does if this user's files changed, so they see it - which settles, since a
 // refresh that finds nothing new changes nothing. Says how long to leave it
@@ -589,7 +590,7 @@ tray.onEvent(event => {
   if (event.event !== 'menu-item') return;
   const { item } = event;
   if (item === 'quit') return void leave();
-  // Check now searches for review requests too - polls only read the inbox
+  // Check Now searches for review requests too - polls only read the inbox
   if (item === 'refresh' || item === 'gh-check') {
     inbox.search();
     return void operation(() => refresh(true));
