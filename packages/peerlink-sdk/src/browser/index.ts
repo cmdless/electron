@@ -1,13 +1,13 @@
 import { chunked, fromDataChannel, pipeConnection } from '../pipes.js';
-import { answerPath, gathered, offerPath, signalFolder, waitForFile } from '../signaling.js';
-import type { LinkTarget, SignalAnswer, SignalOffer } from '../signaling.js';
-import type { Dropbox } from '../dropbox.js';
+import { gathered } from '../signaling.js';
+import type { LinkTarget, SignalOffer } from '../signaling.js';
+import type { SignalingProvider } from '../providers.js';
 import type { IceServer } from '../index.js';
 
 export type ConnectOptions = {
   // the device's own, from its advertisement
   iceServers: IceServer[];
-  // how long to wait for the device to answer through Dropbox
+  // how long to wait for the device to answer through the provider
   answerTimeoutMs?: number;
   // how long to wait for the connection itself once it has
   connectTimeoutMs?: number;
@@ -15,9 +15,9 @@ export type ConnectOptions = {
 
 export type DeviceLink = Awaited<ReturnType<typeof connectDevice>>;
 
-// a peer connection to another device, signaled through Dropbox. Each open
+// a peer connection to another device, signaled through a provider. Each open
 // is its own data channel, relayed by that device to one of its offers.
-export async function connectDevice(dropbox: Dropbox, deviceId: string, options: ConnectOptions) {
+export async function connectDevice(provider: SignalingProvider, deviceId: string, options: ConnectOptions) {
   const { iceServers, answerTimeoutMs = 60_000, connectTimeoutMs = 20_000 } = options;
   const peer = new RTCPeerConnection({ iceServers });
   const sessionId = crypto.randomUUID();
@@ -30,8 +30,7 @@ export async function connectDevice(dropbox: Dropbox, deviceId: string, options:
     await gathered(peer, listener => peer.addEventListener('icegatheringstatechange', listener));
 
     const offer: SignalOffer = { version: 1, sessionId, createdAt: new Date().toISOString(), sdp: peer.localDescription!.sdp };
-    await dropbox.upload(offerPath(deviceId, sessionId), JSON.stringify(offer));
-    const answer = JSON.parse(await waitForFile(dropbox, signalFolder(deviceId), answerPath(deviceId, sessionId), answerTimeoutMs)) as SignalAnswer;
+    const answer = await provider.sendOffer(deviceId, offer, answerTimeoutMs);
     await peer.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
 
     await new Promise<void>((resolve, reject) => {

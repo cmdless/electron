@@ -1,7 +1,7 @@
 import { defineProtocol } from '@cmdless/rpc-sdk';
 
 export * from './dropbox.js';
-export * from './devices.js';
+export * from './providers.js';
 export * from './pipes.js';
 export * from './signaling.js';
 
@@ -21,6 +21,13 @@ export type AdvertisedOffer = Omit<Offer, 'address'>;
 
 export type IceServer = { urls: string | string[]; username?: string; credential?: string };
 
+// what carries this device's advertisement and its signaling - one at a
+// time: Dropbox (peerlink's own app, or yours by its key), or a folder every
+// device can write to, such as one a sync client keeps in step
+export type ProviderSettings =
+  | { kind: 'dropbox'; appKey?: string }
+  | { kind: 'folder'; path: string };
+
 // settings.json
 export type SettingsState = {
   // generated on the first run, then stable
@@ -33,10 +40,10 @@ export type SettingsState = {
   heartbeatSeconds: number;
   // whether the daemon shows a tray, whoever started it
   tray: boolean;
+  provider: ProviderSettings;
 };
 
-// /devices/<deviceId>.json in the Dropbox app folder: what this device
-// tells the others, never an address
+// what this device tells the others through the provider, never an address
 export type Advertisement = {
   version: 1;
   deviceId: string;
@@ -94,9 +101,10 @@ export const peerlinkProtocol = defineProtocol(({ side, request, state }) => ({
       offer: request<OfferParams, { id: string }>('offers/add'),
       withdraw: request<{ id: string }, void>('offers/remove'),
       updateSettings: request<SettingsUpdate, void>('settings/update'),
-      // signs in to Dropbox (a sign-in window, through the auth broker) and starts syncing
+      // signs in to the provider - Dropbox: a sign-in window, through the auth
+      // broker - and starts syncing; a provider with no account refuses
       signIn: request<void, void>('account/sign-in'),
-      // stops syncing, marks this device offline, and signs out of Dropbox
+      // stops syncing, marks this device offline, and signs out of the provider
       signOut: request<void, void>('account/sign-out'),
       // marks this device offline and ends the daemon, tray and all
       stop: request<void, void>('host/stop'),
@@ -108,7 +116,7 @@ export const peerlinkProtocol = defineProtocol(({ side, request, state }) => ({
     offers: state<Record<string, Offer>>('offers'),
     settings: state<SettingsState>('settings'),
     account: state<AccountState>('account'),
-    // the other devices on this Dropbox account, by deviceId
+    // the other devices the provider reaches, by deviceId
     devices: state<Record<string, Device>>('devices'),
   },
 }));
