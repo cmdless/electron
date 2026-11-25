@@ -79,11 +79,11 @@ async function main() {
   const setAccount = (account: AccountState) => store.set({ account });
 
   // the provider's Dropbox app, if it's Dropbox - a folder has no account
-  const appOf = (provider: ProviderSettings) => provider.kind === 'dropbox' ? dropboxApp(provider.appKey) : undefined;
+  const appOf = (provider: ProviderSettings) => provider.kind === 'dropbox' ? dropboxApp(provider.appKey, provider.redirectUri) : undefined;
 
   const signalingFor = (provider: ProviderSettings) => {
     if (provider.kind === 'folder') return folderSignaling(provider.path);
-    const app = dropboxApp(provider.appKey);
+    const app = dropboxApp(provider.appKey, provider.redirectUri);
     return dropboxSignaling(async () => (await auth.request.getToken({ provider: app, interactive: false })).accessToken);
   };
 

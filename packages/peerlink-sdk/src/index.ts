@@ -22,10 +22,11 @@ export type AdvertisedOffer = Omit<Offer, 'address'>;
 export type IceServer = { urls: string | string[]; username?: string; credential?: string };
 
 // what carries this device's advertisement and its signaling - one at a
-// time: Dropbox (peerlink's own app, or yours by its key), or a folder every
-// device can write to, such as one a sync client keeps in step
+// time: Dropbox (peerlink's own app, or yours by its key and a redirect URI
+// registered for it), or a folder every device can write to, such as one a
+// sync client keeps in step
 export type ProviderSettings =
-  | { kind: 'dropbox'; appKey?: string }
+  | { kind: 'dropbox'; appKey?: string; redirectUri?: string }
   | { kind: 'folder'; path: string };
 
 // settings.json
