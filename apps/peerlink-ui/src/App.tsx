@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createBrowserAuth, NotSignedIn } from '@cmdless/auth-sdk/browser'
-import { createDropbox, dropboxApp, watchDevices } from '@cmdless/peerlink-sdk'
+import { dropboxApp, dropboxSignaling } from '@cmdless/peerlink-sdk'
 import type { AdvertisedOffer, Device } from '@cmdless/peerlink-sdk'
 import { connectDevice } from '@cmdless/peerlink-sdk/browser'
 import { hangarProtocol } from '@cmdless/hangar-sdk'
@@ -8,8 +8,8 @@ import type { AgentsState, HostState } from '@cmdless/hangar-sdk'
 
 // the same Dropbox app the daemons use, signed in to from this page, which
 // is also where Dropbox sends the sign-in back to
-const auth = createBrowserAuth({ ...dropboxApp, redirectUri: `${window.location.origin}/` })
-const dropbox = createDropbox(async retry => {
+const auth = createBrowserAuth({ ...dropboxApp(), redirectUri: `${window.location.origin}/` })
+const signaling = dropboxSignaling(async retry => {
   if (retry) auth.expire()
   return auth.getToken()
 })
@@ -28,7 +28,7 @@ function useDevices(signedIn: boolean, signedOut: (reason: string) => void) {
 
   useEffect(() => {
     if (!signedIn) return
-    const watch = watchDevices(dropbox, {
+    const watch = signaling.watchDevices({
       onChange: setDevices,
       onReady: () => setError(undefined),
       onError: reason => {
@@ -54,7 +54,7 @@ function HangarView({ deviceId, device, offer }: { deviceId: string; device: Dev
     let closed = false
     let close = () => { }
     ;(async () => {
-      const link = await connectDevice(dropbox, deviceId, { iceServers: device.iceServers })
+      const link = await connectDevice(signaling, deviceId, { iceServers: device.iceServers })
       close = link.close
       if (closed) return close()
       link.onClose(() => setPhase('Disconnected'))

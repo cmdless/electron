@@ -1,10 +1,9 @@
-import { advertisementPath, createDropbox, DropboxError, watchDevices } from '@cmdless/peerlink-sdk';
-import type { Advertisement, Device, LinkTarget, Offer, SettingsState } from '@cmdless/peerlink-sdk';
+import type { Advertisement, Device, LinkTarget, Offer, SettingsState, SignalingProvider, Watch } from '@cmdless/peerlink-sdk';
 import { answerLinks } from './links.js';
 import { DEFAULT_HEARTBEAT_SECONDS } from './settings.js';
 
 type SyncOptions = {
-  getToken: (retry: boolean) => Promise<string>;
+  provider: SignalingProvider;
   settings: () => SettingsState;
   offers: () => Record<string, Offer>;
   setDevices: (devices: Record<string, Device>) => void;
@@ -20,8 +19,8 @@ const heartbeatOf = (settings: SettingsState) => settings.heartbeatSeconds ?? DE
 // keeps this device's advertisement written - on change and every heartbeat
 // - and the other devices' read, for as long as it runs
 export function createSync(options: SyncOptions) {
-  const dropbox = createDropbox(options.getToken);
-  let watcher: ReturnType<typeof watchDevices> | undefined;
+  const { provider } = options;
+  let watcher: Watch | undefined;
   let links: ReturnType<typeof answerLinks> | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
   let publishing: Promise<void> = Promise.resolve();
@@ -43,17 +42,12 @@ export function createSync(options: SyncOptions) {
   // one write at a time, always of the state as it is when it runs
   function publish(online = true) {
     publishing = publishing.catch(() => { }).then(async () => {
-      const own = advertisement(online);
-      await dropbox.upload(advertisementPath(own.deviceId), JSON.stringify(own, null, 2));
+      await provider.publish(advertisement(online));
     });
     return publishing;
   }
 
   const reasonOf = (error: unknown) => String((error as Error)?.message ?? error);
-
-  // a refused or missing token won't fix itself by waiting
-  const fatal = (error: unknown) =>
-    (error instanceof DropboxError && error.status === 401) || reasonOf(error).includes('not signed in');
 
   function stop(markOffline: boolean) {
     if (!watcher) return Promise.resolve();
@@ -67,7 +61,7 @@ export function createSync(options: SyncOptions) {
   }
 
   const failed = (error: unknown): 'stop' | 'retry' => {
-    if (fatal(error)) {
+    if (provider.needsPerson(error)) {
       void stop(false);
       options.onStopped(reasonOf(error));
       return 'stop';
@@ -84,13 +78,13 @@ export function createSync(options: SyncOptions) {
       // written first, so the other devices (and the watch) see this one right away
       publish().catch(failed);
       links = answerLinks({
-        dropbox,
+        provider,
         deviceId: options.settings().deviceId,
         iceServers: () => options.settings().iceServers,
         resolveTarget: options.resolveTarget,
         onError: failed,
       });
-      watcher = watchDevices(dropbox, {
+      watcher = provider.watchDevices({
         ownDeviceId: options.settings().deviceId,
         onChange: options.setDevices,
         onError: failed,

@@ -2,6 +2,7 @@ import { UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteTray, TrayMenuItem } from '@cmdless/ui-sdk/node';
 import type { RpcStore } from '@cmdless/rpc-sdk';
 import type { AccountState, Device, HostState, Offer, SettingsState } from '@cmdless/peerlink-sdk';
+import { providerLabel } from './settings.js';
 
 type PeerlinkStore = RpcStore<{
   host: HostState;
@@ -92,15 +93,15 @@ export function showTrayWhileSet(store: PeerlinkStore, actions: TrayActions) {
     // an error is a sync failing - still signed in
     const signedIn = account.status === 'syncing' || account.status === 'error';
     return [
-      // where the storage provider's account lives - Dropbox, for now
+      // the provider, and its account if it has one - a folder doesn't
       {
         type: 'submenu', label: 'Account', submenu: [
           { id: 'device', label: `peerlink - ${settings.deviceName}`, enabled: false },
           { type: 'separator' },
-          { id: 'account', label: accountLabel(account), enabled: false },
-          signedIn
+          { id: 'account', label: accountLabel(account, providerLabel(settings.provider)), enabled: false },
+          ...settings.provider.kind !== 'dropbox' ? [] : [signedIn
             ? { id: 'sign-out', label: 'Sign Out' }
-            : { id: 'sign-in', label: 'Sign In', enabled: account.status === 'signed-out' },
+            : { id: 'sign-in', label: 'Sign In', enabled: account.status === 'signed-out' }],
         ],
       },
       // what's there to see only once signed in
@@ -136,11 +137,11 @@ export function showTrayWhileSet(store: PeerlinkStore, actions: TrayActions) {
   };
 }
 
-function accountLabel(account: AccountState) {
+function accountLabel(account: AccountState, provider: string) {
   switch (account.status) {
     case 'signed-out': return account.error ? `Signed out: ${account.error}` : 'Signed out';
     case 'signing-in': return 'Signing in...';
-    case 'syncing': return 'Syncing with Dropbox';
+    case 'syncing': return `Syncing through ${provider}`;
     case 'error': return `Error: ${account.error}`;
   }
 }

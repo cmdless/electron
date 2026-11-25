@@ -1,16 +1,25 @@
 // a small Dropbox API client - just what peerlink needs, on fetch, so the
 // daemon and a browser page use the same one
 
-// peerlink's Dropbox app: the client id is public with PKCE, and the
-// redirect is the one registered for the auth broker
-export const dropboxApp = {
+import { fileSignaling } from './providers.js';
+import type { FileChange, SignalFiles, SignalingProvider } from './providers.js';
+
+// peerlink's own Dropbox app - its key is public, as PKCE allows
+export const DROPBOX_APP_KEY = '6bvilhwtvusnqaa';
+
+// a Dropbox app to sign in to: peerlink's own, or one of yours (its app key).
+// An app of yours needs http://localhost/cmdless-auth as a redirect URI -
+// where the auth broker takes the sign-in back - and an App folder of its
+// own, which is where everything goes: only devices signed in to the same
+// Dropbox account through the same app see each other.
+export const dropboxApp = (appKey = DROPBOX_APP_KEY) => ({
   id: 'dropbox',
   authorizeUrl: 'https://www.dropbox.com/oauth2/authorize',
   tokenUrl: 'https://api.dropboxapi.com/oauth2/token',
-  clientId: '6bvilhwtvusnqaa',
+  clientId: appKey,
   redirectUri: 'http://localhost/cmdless-auth',
   extraParams: { token_access_type: 'offline' },
-};
+});
 
 export type DropboxEntry =
   | { '.tag': 'file'; name: string; path_lower: string; rev: string; server_modified: string }
@@ -121,3 +130,73 @@ export function createDropbox(getToken: (retry: boolean) => Promise<string>) {
 }
 
 export type Dropbox = ReturnType<typeof createDropbox>;
+
+// how long a watch that failed waits before it tries again - and how long
+// one waits for a folder nobody's written to yet
+const RETRY_MS = 10_000;
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const notFound = (error: unknown) => error instanceof DropboxError && error.status === 409 && error.summary.includes('not_found');
+
+// a Dropbox app folder as files: a folder is watched by listing it, then
+// longpolling for changes and listing only what changed
+export function dropboxFiles(dropbox: Dropbox): SignalFiles {
+  const changesOf = (entries: DropboxEntry[]): FileChange[] => entries
+    .filter(entry => entry['.tag'] !== 'folder')
+    .map(entry => ({ name: entry.name, removed: entry['.tag'] === 'deleted' }));
+
+  return {
+    write: (path, text) => dropbox.upload(path, text),
+    read: path => dropbox.download(path),
+    remove: path => dropbox.remove(path),
+    watch(folder, onChanges, onError) {
+      let running = true;
+      let poll: AbortController | undefined;
+      void (async () => {
+        while (running) {
+          try {
+            let listed;
+            try {
+              listed = await dropbox.listFolder(folder);
+            } catch (error) {
+              if (!notFound(error)) throw error;
+              // nothing's been written there yet
+              await onChanges([], true);
+              await wait(RETRY_MS);
+              continue;
+            }
+            let { cursor } = listed;
+            if (running) await onChanges(changesOf(listed.entries), true);
+            while (running) {
+              poll = new AbortController();
+              const { changes, backoff } = await dropbox.longpoll(cursor, 60, poll.signal);
+              if (changes) {
+                const next = await dropbox.listFolderContinue(cursor);
+                cursor = next.cursor;
+                if (running) await onChanges(changesOf(next.entries), false);
+              }
+              if (backoff) await wait(backoff * 1000);
+            }
+          } catch (error) {
+            if (!running) return;
+            if (onError(error) === 'stop') return void (running = false);
+            await wait(RETRY_MS);
+          }
+        }
+      })();
+      return {
+        stop() {
+          running = false;
+          poll?.abort();
+        },
+      };
+    },
+  };
+}
+
+// signaling through a Dropbox app folder. getToken is the Dropbox client's
+// (see createDropbox); a refused or missing token needs a sign-in.
+export function dropboxSignaling(getToken: (retry: boolean) => Promise<string>): SignalingProvider {
+  return fileSignaling(dropboxFiles(createDropbox(getToken)), error =>
+    (error instanceof DropboxError && error.status === 401) || String((error as Error)?.message ?? error).includes('not signed in'));
+}
