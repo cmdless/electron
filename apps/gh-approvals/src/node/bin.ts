@@ -14,8 +14,8 @@ import type { Item, UserFile } from './files.js';
 import { GitHub } from './github.js';
 import type { RateLimit } from './github.js';
 import { DEFAULT_POLL_SECONDS, Inbox } from './inbox.js';
-import { listen, newToken, requestRefresh, sendTo } from './peers.js';
-import type { SentItem } from './peers.js';
+import { connect, listen, newToken } from './peers.js';
+import type { Peer, SentItem } from './peers.js';
 import { createLog, logFile } from './log.js';
 import { coalesce, firstLine } from './util.js';
 import { logViewer } from './logViewer.js';
@@ -98,12 +98,16 @@ let mine: Item[] = await own.load();
 // their folder has them
 type Other = { user: string; file: UserFile; items: Item[] };
 let others = new Map<string, Other>();
-// trays that didn't answer, by user and token: a tray that stopped without
-// taking its user.json away. Listed again once they answer, or restart.
-const unreachable = new Set<string>();
-const reachKey = ({ user: name, file }: Other) => `${name}:${file.token}`;
+// a connection to each of them, by user: made once for each user.json - its
+// token and where it listens - and not tried again until that changes, as it
+// does when their tray restarts. Only someone whose connection is open is
+// listed: a tray that stopped without taking its user.json away isn't.
+type Link = { key: string; peer?: Peer };
+const links = new Map<string, Link>();
+const linkKey = ({ token: presented, endpoint: at }: UserFile) => `${presented}@${at.host}:${at.port}`;
+const peerOf = (name: string) => links.get(name)?.peer;
 const running = () => [...others.values()]
-  .filter(other => !unreachable.has(reachKey(other)))
+  .filter(other => peerOf(other.user))
   .sort((a, b) => a.user.localeCompare(b.user));
 
 // while something asked for from the menu is being done, the menu is off but
@@ -122,12 +126,13 @@ let signingIn = false;
 let nextPoll: NodeJS.Timeout | undefined;
 let pollSeconds = DEFAULT_POLL_SECONDS;
 
-// what a menu item does when it's clicked, as its id: `owner` is whose item
-// it is - this user's, or someone else's
+// what a menu item does when it's clicked, as its id - `to` is the other
+// user whose tray does it
 type Action =
   | { do: 'view'; url: string }
-  | { do: 'send'; url: string; to: string }
-  | { do: 'approve'; owner: string; url: string; environment?: number }
+  | { do: 'approve'; url: string; environment?: number }
+  | { do: 'ask-approval'; to: string; url: string }
+  | { do: 'approve-as'; to: string; url: string; environment?: number }
   | { do: 'ask-refresh'; to: string };
 const actionId = (action: Action) => JSON.stringify(action);
 
@@ -154,37 +159,38 @@ function menu(): TrayMenuItem[] {
   const online = listener !== undefined;
   const peers = running();
 
-  // approving it - a deployment one environment at a time
-  const approveItem = (owner: string, item: Item): TrayMenuItem => item.kind === 'deployment'
-    ? {
-      type: 'submenu', label: 'Auto Approve', submenu: item.environments.map(environment => ({
-        id: actionId({ do: 'approve', owner, url: item.url, environment: environment.id }), label: environment.name,
-      })),
-    }
-    : { id: actionId({ do: 'approve', owner, url: item.url }), label: 'Auto Approve' };
+  // approving it - a deployment one environment at a time: this user's with
+  // their own account, someone else's by having their tray do it with theirs
+  const approveItem = (owner: string, item: Item, enabled: boolean): TrayMenuItem => {
+    const action = (environment?: number): Action => owner === user
+      ? { do: 'approve', url: item.url, environment }
+      : { do: 'approve-as', to: owner, url: item.url, environment };
+    return item.kind === 'deployment'
+      ? {
+        type: 'submenu', label: 'Auto Approve', enabled, submenu: item.environments.map(environment => ({
+          id: actionId(action(environment.id)), label: environment.name,
+        })),
+      }
+      : { id: actionId(action()), label: 'Auto Approve', enabled };
+  };
 
-  // something only someone else can approve goes to someone whose tray is
-  // running
-  const sendItem = ({ url }: Item): TrayMenuItem => ({
-    type: 'submenu', label: `Send To (${peers.length})`, enabled: peers.length > 0,
-    submenu: peers.map(peer => ({ id: actionId({ do: 'send', url, to: peer.user }), label: peer.user })),
-  });
-
-  // grouped by repository; each one offers approving it, or - marked with a *
-  // - sending it to someone who can, then opening it on GitHub
+  // grouped by repository; each one opens on GitHub, and is approved - or,
+  // for someone else's, they're asked to approve it. A pull request marked *
+  // was pushed to last by whoever it's waiting on, so only someone else can.
   const grouped = (owner: string, items: Item[]): TrayMenuItem[] => {
     const byRepo = new Map<string, Item[]>();
     for (const item of items) byRepo.set(item.repo, [...byRepo.get(item.repo) ?? [], item]);
     return [...byRepo].sort(([a], [b]) => a.localeCompare(b)).map(([repo, inRepo]) => ({
       type: 'submenu', label: repo, enabled: usable,
       submenu: inRepo.sort((a, b) => a.number - b.number).map(item => {
-        const othersOnly = owner === user && item.kind === 'pull-request' && item.othersOnly;
+        const othersOnly = item.kind === 'pull-request' && item.othersOnly;
         return {
           type: 'submenu', label: titled(`${othersOnly ? '*' : ''}#${item.number} ${item.title}`), enabled: usable,
           submenu: [
-            othersOnly ? sendItem(item) : approveItem(owner, item),
-            { type: 'separator' },
             { id: actionId({ do: 'view', url: item.url }), label: 'View in Browser...' },
+            { type: 'separator' },
+            ...(owner === user ? [] : [{ id: actionId({ do: 'ask-approval', to: owner, url: item.url }), label: 'Request Approval' }]),
+            approveItem(owner, item, !othersOnly),
           ],
         };
       }),
@@ -273,25 +279,26 @@ async function goOnline() {
       log(`${from} asked for a refresh`);
       void refresh();
     },
-    send: (from, item) => void received(from, item).catch(async error => {
-      await render({ tooltip: `${from} sent something, but it couldn't be shown: ${firstLine(error)}` });
+    requestApproval: (from, item) => void approvalRequested(from, item).catch(async error => {
+      await render({ tooltip: `${from} asked for an approval, but it couldn't be shown: ${firstLine(error)}` });
     }),
+    approve: approveFor,
   });
   endpoint = { host: os.hostname(), port: listener.port };
   await writeOwnUserFile();
   log(`listening on ${endpoint.host}:${endpoint.port}`);
 }
 
-// not signed in (or leaving): user.json goes first, then the others are asked
-// to look again, so nobody lists this tray once it's gone
+// not signed in (or leaving): user.json goes, then every connection - theirs
+// to this tray and this tray's to them - so everyone drops it straight away
 async function goOffline() {
   if (!listener) return;
   const closing = listener;
   listener = undefined;
   await removeUserFile(folder, user).catch(() => { });
-  await Promise.allSettled([...others.values()].map(other => requestRefresh(other.file, user)));
+  closing.close();
+  for (const name of [...links.keys()]) unlink(name);
   others = new Map();
-  closing.server.close();
   log('stopped listening');
 }
 
@@ -308,11 +315,29 @@ host.onClose(() => void leave());
 process.once('SIGINT', () => void leave());
 process.once('SIGTERM', () => void leave());
 
-async function received(from: string, item: SentItem) {
-  log(`${from} sent ${item.kind}: ${item.title}`);
+// someone asking this user to approve one of their items - clicked, it opens
+async function approvalRequested(from: string, item: SentItem) {
+  log(`${from} asked for approval of ${item.kind}: ${item.title}`);
   const kind = item.kind === 'pull-request' ? 'a pull request' : 'a deployment';
-  const notification = await host.showNotification({ title: `${from} sent you ${kind}`, body: item.title });
+  const notification = await host.showNotification({ title: `${from} asks you to approve ${kind}`, body: item.title });
   if (await notification.closed === 'click') await host.shell.openExternal(item.url);
+}
+
+// someone having this tray approve one of this user's items, with this
+// user's account - who it was for goes in the approval, and this user is told
+async function approveFor(from: string, url: string, environment?: number) {
+  const found = mine.find(each => each.url === url);
+  if (!found) throw new Error(`that isn't waiting on ${user} any more`);
+  let what: string;
+  try {
+    what = await approveItem(found, environment, `Auto approved by ${user} on behalf of ${from}`);
+  } catch (error) {
+    log(`${from} couldn't have this tray approve #${found.number} ${found.title}: ${firstLine(error)}`);
+    throw error;
+  }
+  log(`${from} had this tray approve ${what}`);
+  void host.showNotification({ title: `${from} approved this as you`, body: found.title }).catch(() => { });
+  void refresh(true);
 }
 
 // One refresh at a time, whoever asks. Asks while one runs make one more
@@ -330,14 +355,9 @@ const refreshing = coalesce<boolean>(async broadcast => {
 }, (queued, next) => queued || next);
 const refresh = (broadcast = false) => refreshing(broadcast);
 
-// asks every other running tray to refresh - and notes the ones that don't
-// answer, listing them again once they do
+// asks every other running tray to refresh
 function broadcastRefresh() {
-  const all = [...others.values()];
-  void Promise.all(all.map(other => requestRefresh(other.file, user).then(
-    () => unreachable.delete(reachKey(other)),
-    () => unreachable.add(reachKey(other)),
-  ))).then(() => render());
+  for (const other of running()) void peerOf(other.user)?.request.refresh().catch(() => { });
 }
 
 // the users' folders: who's running, and - for anyone whose files changed
@@ -353,9 +373,45 @@ async function scanUsers() {
     next.set(name, { user: name, file, items: same ? before.items : await readItems(folder, name) });
   }));
   others = next;
-  // a tray that's gone, or restarted with a new token, isn't unreachable any more
-  const current = new Set([...others.values()].map(reachKey));
-  for (const key of unreachable) if (!current.has(key)) unreachable.delete(key);
+  // the connections follow the files: anyone gone, or with a new user.json,
+  // is hung up on - and anyone not connected to yet is
+  for (const [name, { key }] of [...links]) {
+    const other = others.get(name);
+    if (!other || linkKey(other.file) !== key) unlink(name);
+  }
+  await Promise.all([...others.values()].filter(other => !links.has(other.user)).map(link));
+}
+
+// connects to another tray, once for its user.json: listed while it's open,
+// and not tried again if it fails or closes until their user.json changes
+async function link(other: Other) {
+  const entry: Link = { key: linkKey(other.file) };
+  links.set(other.user, entry);
+  let peer: Peer;
+  try {
+    peer = await connect(other.file, user);
+  } catch (error) {
+    log(`couldn't connect to ${other.user}: ${firstLine(error)}`);
+    return;
+  }
+  // hung up on, or gone offline, while it connected
+  if (links.get(other.user) !== entry || !listener) return peer.dispose();
+  entry.peer = peer;
+  log(`connected to ${other.user}`);
+  peer.onClose(() => {
+    if (entry.peer !== peer) return;
+    entry.peer = undefined;
+    log(`${other.user} hung up`);
+    void render();
+  });
+}
+
+function unlink(name: string) {
+  const entry = links.get(name);
+  links.delete(name);
+  const peer = entry?.peer;
+  if (entry) entry.peer = undefined;
+  peer?.dispose();
 }
 
 // gh's token for this user - or, if gh is missing or not signed in as them,
@@ -529,9 +585,6 @@ function showLog() {
     .finally(() => { if (logWindow === opening) logWindow = undefined; });
 }
 
-// whose items an action's owner means
-const itemsOf = (owner: string) => owner === user ? mine : others.get(owner)?.items ?? [];
-
 tray.onEvent(event => {
   if (event.event !== 'menu-item') return;
   const { item } = event;
@@ -554,59 +607,74 @@ tray.onEvent(event => {
     case 'view':
       return void host.shell.openExternal(action.url);
     case 'approve': {
-      const found = itemsOf(action.owner).find(each => each.url === action.url);
+      const found = mine.find(each => each.url === action.url);
       if (!found) return;
-      return void operation(() => approve(found, action.environment));
+      return void operation(() => approveOwn(found, action.environment));
     }
     case 'ask-refresh': {
-      const other = others.get(action.to);
-      if (!other) return;
-      return void requestRefresh(other.file, user).then(
-        () => log(`asked ${other.user} to refresh`),
-        error => render({ tooltip: `Couldn't reach ${other.user}: ${firstLine(error)}` }),
+      const peer = peerOf(action.to);
+      if (!peer) return;
+      return void peer.request.refresh().then(
+        () => log(`asked ${action.to} to refresh`),
+        error => render({ tooltip: `Couldn't reach ${action.to}: ${firstLine(error)}` }),
       );
     }
-    case 'send': {
-      const found = mine.find(each => each.url === action.url);
-      const other = others.get(action.to);
-      if (!found || !other) return;
+    case 'ask-approval': {
+      const found = others.get(action.to)?.items.find(each => each.url === action.url);
+      const peer = peerOf(action.to);
+      if (!found || !peer) return;
       // what goes to the other tray is just what it is and where
       const { kind, title, url } = found;
-      const sent: SentItem = { kind, title, url };
+      return void peer.request.requestApproval({ item: { kind, title, url } }).then(
+        () => log(`asked ${action.to} to approve ${kind}: ${title}`),
+        async error => {
+          log(`couldn't ask ${action.to} to approve ${title}: ${firstLine(error)}`);
+          await render({ tooltip: `Couldn't reach ${action.to}: ${firstLine(error)}` });
+        },
+      );
+    }
+    case 'approve-as': {
+      const found = others.get(action.to)?.items.find(each => each.url === action.url);
+      const peer = peerOf(action.to);
+      if (!found || !peer) return;
+      const what = `#${found.number} ${found.title} (${found.repo})`;
       return void operation(async () => {
-        await sendTo(other.file, user, sent).then(
-          () => log(`sent ${sent.kind} to ${other.user}: ${sent.title}`),
-          async error => {
-            log(`couldn't send to ${other.user}: ${firstLine(error)}`);
-            await render({ tooltip: `Couldn't send to ${other.user}: ${firstLine(error)}` });
-          });
+        try {
+          await peer.request.approve({ url: action.url, environment: action.environment });
+          log(`had ${action.to} approve ${what}`);
+        } catch (error) {
+          log(`couldn't have ${action.to} approve ${what}: ${firstLine(error)}`);
+          await render({ tooltip: `Couldn't approve as ${action.to}: ${firstLine(error)}` });
+        }
       });
     }
   }
 });
 
-// what an approval says it was
-const approvalMessage = `Auto approved by ${user} via ${appName}`;
-
-// approves a pull request, or a deployment to one environment - this user's
-// or someone else's - then has everyone look again: it should drop off
-async function approve(item: Item, environmentId?: number) {
+// approves a pull request, or a deployment to one environment, with this
+// user's account - saying what it approved
+async function approveItem(item: Item, environmentId: number | undefined, message: string) {
   const what = `#${item.number} ${item.title} (${item.repo})`;
+  const ghToken = await tokenFor(user);
+  if (!ghToken) throw new Error(`gh isn't signed in as ${user}`);
+  if (item.kind === 'deployment') {
+    const environment = item.environments.find(each => each.id === environmentId);
+    if (!environment) throw new Error('that environment isn\'t waiting any more');
+    await approveDeployment(ghToken, item, environment, message);
+    return `deployment to ${environment.name}: ${what}`;
+  }
+  await approvePullRequest(ghToken, item.url, message);
+  return `pull request: ${what}`;
+}
+
+// this user approving one of their own from the menu - then everyone looks
+// again: it should drop off
+async function approveOwn(item: Item, environmentId?: number) {
   try {
-    const ghToken = await tokenFor(user);
-    if (!ghToken) throw new Error(`gh isn't signed in as ${user}`);
-    if (item.kind === 'deployment') {
-      const environment = item.environments.find(each => each.id === environmentId);
-      if (!environment) throw new Error('that environment isn\'t waiting any more');
-      await approveDeployment(ghToken, item, environment, approvalMessage);
-      log(`approved deployment to ${environment.name}: ${what}`);
-    } else {
-      await approvePullRequest(ghToken, item.url, approvalMessage);
-      log(`approved pull request: ${what}`);
-    }
+    log(`approved ${await approveItem(item, environmentId, `Auto approved by ${user} via ${appName}`)}`);
   } catch (error) {
     const message = firstLine(error);
-    log(`couldn't approve ${what}: ${message}`);
+    log(`couldn't approve #${item.number} ${item.title} (${item.repo}): ${message}`);
     await render({ tooltip: `Couldn't approve: ${message}` });
     return;
   }
