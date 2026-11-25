@@ -230,8 +230,8 @@ function menu(): TrayMenuItem[] {
         type: 'submenu', label: `Logged in as ${user}`, enabled: !busy, submenu: [
           { id: 'listening', label: `Listening on ${endpoint.host}:${endpoint.port}...`, enabled: false },
           { type: 'separator' },
-          { id: 'notification-settings', label: 'Notification settings...' },
-          { id: 'notifications', label: 'Notifications...' },
+          { id: 'notification-settings', label: 'GitHub Notification settings...' },
+          { id: 'notifications', label: 'GitHub Notifications...' },
           { id: 'log-viewer', label: 'Log Viewer...' },
           { type: 'separator' },
           { type: 'checkbox', id: 'auto-mark-done', label: 'Automatically Mark as Done', checked: config.autoMarkDone },
