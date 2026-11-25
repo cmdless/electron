@@ -8,7 +8,7 @@ import { connectOrStart, nothingAnswers } from '@cmdless/core/node';
 import { connectPeerlink, dropboxApp } from '@cmdless/peerlink-sdk/node';
 import type { SettingsState, SettingsUpdate } from '@cmdless/peerlink-sdk';
 import { ensureAuth } from '@cmdless/auth-sdk/node';
-import { defaultSettings, settingsPath, validSettings } from './settings.js';
+import { defaultSettings, providerLabel, settingsPath, validSettings } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const daemonPath = path.join(__dirname, 'daemon.js');
@@ -19,10 +19,14 @@ const USAGE = `usage: peerlink <command>
                                and --no-tray also set whether it shows a tray
   stop                         stop the daemon
   status                       print the daemon's state
-  sign-in                      sign in to Dropbox
-  sign-out                     sign out of Dropbox
+  sign-in                      sign in to the provider (Dropbox)
+  sign-out                     sign out of the provider (Dropbox)
   set <setting> <value>        change a setting: name, heartbeat (seconds),
                                or tray (true or false)
+  set provider dropbox [key]   sync through Dropbox - peerlink's own app, or
+                               yours by its app key
+  set provider folder <path>   sync through a folder every device can write
+                               to, such as a synced one
 
 Only start starts the daemon. The rest work on whatever's running - sign-in,
 sign-out and set work without it too.`;
@@ -49,15 +53,22 @@ const read = async <T>(channel: { subscribe: (listener: (state: T) => void) => P
 };
 
 // a setting as the command line gives it
-function settingFrom(name: string | undefined, value: string | undefined): SettingsUpdate {
+function settingFrom([name, value, extra]: string[]): SettingsUpdate {
   if (name === undefined || value === undefined) throw new Error('set takes a setting and a value');
   switch (name) {
+    case 'provider':
+      if (value === 'dropbox') return validSettings({ provider: { kind: 'dropbox', ...(extra !== undefined && { appKey: extra }) } });
+      if (value === 'folder') {
+        if (extra === undefined) throw new Error('set provider folder takes the folder');
+        return validSettings({ provider: { kind: 'folder', path: path.resolve(extra) } });
+      }
+      throw new Error('the provider is dropbox or folder');
     case 'name': return validSettings({ deviceName: value });
     case 'heartbeat': return validSettings({ heartbeatSeconds: Number(value) });
     case 'tray':
       if (value !== 'true' && value !== 'false') throw new Error('tray is true or false');
       return validSettings({ tray: value === 'true' });
-    default: throw new Error(`no setting ${name} - there's name, heartbeat and tray`);
+    default: throw new Error(`no setting ${name} - there's name, heartbeat, tray and provider`);
   }
 }
 
@@ -65,17 +76,21 @@ function settingFrom(name: string | undefined, value: string | undefined): Setti
 // it and renamed over it, as the daemon writes it
 async function writeSettings(update: SettingsUpdate) {
   const file = settingsPath();
-  let settings: SettingsState;
-  try {
-    settings = JSON.parse(await fs.readFile(file, 'utf8')) as SettingsState;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    settings = defaultSettings();
-  }
+  const settings = await readSettings();
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(temp, JSON.stringify({ ...defaultSettings(), ...settings, ...update }, null, 2) + '\n');
+  await fs.writeFile(temp, JSON.stringify({ ...settings, ...update }, null, 2) + '\n');
   await fs.rename(temp, file);
+}
+
+// settings.json as it is, with defaults for anything it doesn't have
+async function readSettings(): Promise<SettingsState> {
+  try {
+    return { ...defaultSettings(), ...JSON.parse(await fs.readFile(settingsPath(), 'utf8')) as SettingsState };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    return defaultSettings();
+  }
 }
 
 const { positionals, values } = parseArgs({
@@ -144,20 +159,23 @@ async function main() {
           peerlink.dispose();
         }
       } else {
+        const { provider } = await readSettings();
+        if (provider.kind !== 'dropbox') throw new Error(`${providerLabel(provider)} has no account to sign ${command === 'sign-in' ? 'in to' : 'out of'}`);
+        const app = dropboxApp(provider.appKey);
         const broker = await auth();
         try {
-          if (command === 'sign-in') await broker.request.getToken({ provider: dropboxApp, interactive: true });
-          else await broker.request.signOut({ provider: dropboxApp });
+          if (command === 'sign-in') await broker.request.getToken({ provider: app, interactive: true });
+          else await broker.request.signOut({ provider: app });
         } finally {
           broker.dispose();
         }
       }
-      console.log(command === 'sign-in' ? 'signed in to Dropbox' : 'signed out of Dropbox');
+      console.log(command === 'sign-in' ? 'signed in' : 'signed out');
       return;
     }
 
     case 'set': {
-      const update = settingFrom(rest[0], rest[1]);
+      const update = settingFrom(rest);
       const peerlink = await running();
       if (peerlink) {
         try {
