@@ -70,7 +70,7 @@ export class Inbox {
   // scan, like what's waiting in the inbox, until they aren't waiting. The
   // search itself is only run when asked for (it has a rate limit of its
   // own, and may not be free when nothing's changed): on the first scan, and
-  // the one after search() - Check now.
+  // the one after search() - Check Now.
   private searched = new Set<string>();
   private searching = true;
   search() {
