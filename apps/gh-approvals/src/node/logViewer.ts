@@ -1,8 +1,8 @@
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { memory } from '@cmdless/rpc-sdk';
-import { acquireCmdlessUrl, UIHost } from '@cmdless/ui-sdk/node';
+import { UIHost } from '@cmdless/ui-sdk/node';
 import { logProtocol } from '../shared/protocols.js';
+import { page } from './page.js';
 import { coalesce } from './util.js';
 import type { LogState } from '../shared/protocols.js';
 
@@ -27,9 +27,6 @@ async function tail(file: string) {
   }
 }
 
-// its page: the dev server's, when running under it, or the built one
-const page = () => `${acquireCmdlessUrl() || fileURLToPath(new URL('../../dist/index.html', import.meta.url))}#/log`;
-
 export type LogViewerParams = { file: string; title?: string };
 
 // a window tailing a file: its state is the file's last lines, read again
@@ -46,7 +43,7 @@ export const logViewer = UIHost.factory(async (opener, { file, title }: LogViewe
 
   try {
     const window = await opener.openWindow({
-      type: 'file', source: page(), window: { title, width: 900, height: 600 },
+      type: 'file', source: page('/log'), window: { title, width: 900, height: 600 },
       backend: logProtocol.accept(undefined, store),
     });
     void window.closed.finally(() => watcher.close());

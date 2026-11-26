@@ -1,6 +1,6 @@
 import { defineProtocol } from '@cmdless/rpc-sdk';
 import type { IncomingChannel, RtcHost } from '@cmdless/rtc-sdk/node';
-import type { Item, Items } from './items.js';
+import type { Item, Items } from '../shared/items.js';
 
 // something one tray can send another: a pull request to review, or a
 // deployment to approve - what it is, and where

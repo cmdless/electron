@@ -231,6 +231,10 @@ export function serveStore<S extends Record<string, unknown>>(connection: Messag
   connection.onDispose(closeAll);
 }
 
+// a JSON Pointer to the place these keys lead to, each escaped - so a key
+// with a / or ~ in it is still one key
+export const pointer = (...keys: string[]) => keys.map(key => `/${jsonpatch.escapePathComponent(key)}`).join('');
+
 // a channel's ops moved under path in another one - to pass its changes on
 // as one entry of a bigger state. A whole replace becomes an add there, so
 // it works whether or not the entry is there yet.

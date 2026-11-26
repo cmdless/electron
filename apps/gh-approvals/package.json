@@ -33,6 +33,8 @@
     "@cmdless/rpc-sdk": "*",
     "@cmdless/rtc-sdk": "*",
     "@cmdless/ui-sdk": "*",
+    "@mantine/core": "9.7.3",
+    "@mantine/hooks": "9.7.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

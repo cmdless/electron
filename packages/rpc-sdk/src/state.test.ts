@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import jsonpatch from 'fast-json-patch';
 import { defineProtocol } from './protocol.js';
-import { memory, prefixOps } from './state.js';
+import { memory, pointer, prefixOps } from './state.js';
 import type { ChannelStorage, StateChange, StatePatch } from './state.js';
 import { createLoopbackPair, tick } from './loopback.fixture.js';
 
@@ -285,6 +285,10 @@ test('a channel can be passed on as one entry of another by its ops', async () =
   await until(() => relay.state.links.remote?.entries.a?.name === 'A2');
 
   assert.deepEqual(relay.state.links, { mine: { entries: {} }, remote: { entries: { a: { name: 'A2' } } } });
+});
+
+test('pointer escapes each key', () => {
+  assert.equal(pointer('a/b', 'c~d', 'items'), '/a~1b/c~0d/items');
 });
 
 test('prefixOps moves every path, and a whole replace becomes an add', () => {

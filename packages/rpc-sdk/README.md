@@ -130,7 +130,7 @@ stop();
 - A change reaches subscribers at once; `set`/`update` return a promise that settles once it's saved, so a handler can `await` a durable change. Saves run one at a time per channel, and changes made during a save fold into a single save of the latest state.
 - `store.patch(channel, ops)` applies a JSON Patch as it is and sends those same ops on, without diffing again. Ops that don't apply throw and change nothing.
 - A listener also gets the ops that took it to each state: `subscribe((state, ops) => …)`. The first state, and any fresh state after a gap, comes as a whole replace (`[{ op: 'replace', path: '', value }]`). The ops are the state's own values, so read them and don't change them.
-- Together they pass one channel on as part of another, with no diffing: `client.state.agents.subscribe((_, ops) => relay.patch('links', prefixOps(ops, '/remote')))`. `prefixOps` moves every path under the entry, and turns a whole replace into an add, so the entry needn't be there first.
+- Together they pass one channel on as part of another, with no diffing: `client.state.agents.subscribe((_, ops) => relay.patch('links', prefixOps(ops, '/remote')))`. `prefixOps` moves every path under the entry (`pointer(...keys)` builds one, escaping each key), and turns a whole replace into an add, so the entry needn't be there first.
 - Clients write through ordinary requests, never patches - the server is the only authority on its state.
 - Each channel's changes are numbered. A client that sees a gap resubscribes for a fresh state instead of applying a patch out of order.
 - Listeners on one connection share a single subscription; the last one to stop unsubscribes, and a closed connection drops all of its subscriptions.

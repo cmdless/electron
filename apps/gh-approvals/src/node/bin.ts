@@ -8,21 +8,25 @@ import { UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteWindow, TrayMenuItem, TrayParams } from '@cmdless/ui-sdk/node';
 import { ghInstalled, startLogin, tokenFor } from './accounts.js';
 import { approveDeployment, approvePullRequest } from './approvals.js';
-import { byUrl, writeAtomic } from './items.js';
-import type { Item, Items } from './items.js';
+import { byUrl } from '../shared/items.js';
+import type { Item, Items } from '../shared/items.js';
 import { GitHub } from './github.js';
 import type { RateLimit } from './github.js';
 import { DEFAULT_POLL_SECONDS, Inbox } from './inbox.js';
 import { connect, serve, trayProtocol, userOf } from './peers.js';
 import type { SentItem, Tray, TrayInfo } from './peers.js';
-import { memory } from '@cmdless/rpc-sdk';
+import { memory, pointer, prefixOps } from '@cmdless/rpc-sdk';
+import type { Operation } from '@cmdless/rpc-sdk';
 import { accountOf, createRtcHost, parseProvider, providerLabel, providerName, providerUsage, signalingFor } from '@cmdless/rtc-sdk/node';
 import type { ProviderSettings, RtcHost } from '@cmdless/rtc-sdk/node';
 import { ensureAuth, providerKey } from '@cmdless/auth-sdk/node';
 import type { ProviderStatus } from '@cmdless/auth-sdk/node';
 import { createLog, logFile } from './log.js';
-import { coalesce, firstLine } from './util.js';
+import { coalesce, firstLine, writeAtomic } from './util.js';
 import { logViewer } from './logViewer.js';
+import { approvalsWindow } from './approvalsWindow.js';
+import { approvalsProtocol } from '../shared/protocols.js';
+import type { Devices } from '../shared/protocols.js';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { name: string };
 const asset = (name: string) => fileURLToPath(new URL(`../../assets/${name}`, import.meta.url));
@@ -134,12 +138,26 @@ const store = await trayProtocol.createStore({
 });
 const mine = () => Object.values(store.state.items);
 
+// every tray's items by device - this one's and every one it's connected to,
+// each passed on as it changes - for the approvals window, and the menu
+const devices = await approvalsProtocol.createStore({
+  devices: memory<Devices>({ [config.deviceId]: { user, items: store.state.items } }),
+  status: memory({ deviceId: config.deviceId, online: false }),
+});
+const changeDevices = (ops: Operation[]) => void devices.patch('devices', ops).catch(() => { });
+store.watch('items', ({ ops }) => changeDevices(prefixOps(ops, pointer(config.deviceId, 'items'))));
+
 // every other running tray, by device: connected to once a run of it, and not
 // tried again until it runs again. Listed only while it's connected and its
 // items have come.
-type Link = { user: string; session: string; tray?: Tray; items?: Items; close?: () => void };
+type Link = { user: string; session: string; tray?: Tray; close?: () => void };
 const links = new Map<string, Link>();
-const connected = () => [...links.values()].filter(link => link.tray && link.items);
+const connected = () => [...links].filter(([deviceId, link]) => link.tray && devices.state.devices[deviceId])
+  .map(([deviceId, link]) => ({ ...link, tray: link.tray!, items: devices.state.devices[deviceId].items }));
+// gone from the window too
+const forget = (deviceId: string) => {
+  if (devices.state.devices[deviceId]) changeDevices([{ op: 'remove', path: pointer(deviceId) }]);
+};
 // everyone listed, each with what all their trays have, once over
 const users = () => {
   const byUser = new Map<string, Items>();
@@ -149,8 +167,8 @@ const users = () => {
 };
 // a user's connected trays - the first is the one asked to do anything only
 // one should
-const traysOf = (name: string) => connected().filter(link => link.user === name).map(link => link.tray!);
-const itemOf = (name: string, url: string) => connected().find(link => link.user === name && link.items![url])?.items![url];
+const traysOf = (name: string) => connected().filter(link => link.user === name).map(link => link.tray);
+const itemOf = (name: string, url: string) => connected().find(link => link.user === name && link.items[url])?.items[url];
 
 // while something asked for from the menu is being done, the menu is off but
 // for Quit; refreshes on their own don't turn it off
@@ -280,10 +298,11 @@ function menu(): TrayMenuItem[] {
     // first, who this is checking for - and a way in, if gh isn't signed in
     ...(ghMissing || signedIn === undefined ? [] : [signedIn
       ? {
-        type: 'submenu', label: `Logged in as ${user}`, enabled: !busy, submenu: [
+        type: 'submenu', label: `Logged in as ${user}`, submenu: [
           { type: 'separator' },
           { id: 'notification-settings', label: 'GitHub Notification settings...' },
           { id: 'notifications', label: 'GitHub Notifications...' },
+          { id: 'approvals', label: 'Approval UI...' },
           { id: 'log-viewer', label: 'Log Viewer...' },
           { type: 'separator' },
           { type: 'checkbox', id: 'auto-mark-done', label: 'Automatically Mark as Done', checked: config.autoMarkDone },
@@ -362,6 +381,7 @@ function goOnline() {
       void goOffline().then(() => render());
     },
   });
+  void devices.set({ status: { ...devices.state.status, online: true } });
   log(`sharing through ${providerLabel(provider!)}`);
 }
 
@@ -372,6 +392,7 @@ async function goOffline() {
   if (!rtc) return;
   const stopping = rtc;
   rtc = undefined;
+  void devices.set({ status: { ...devices.state.status, online: false } });
   for (const deviceId of [...links.keys()]) unlink(deviceId);
   await stopping.stop();
   log('stopped sharing');
@@ -473,15 +494,19 @@ async function link(deviceId: string, info: TrayInfo) {
   entry.close = connection.close;
   connection.onClose(() => {
     if (entry.tray !== connection.tray) return;
-    entry.tray = entry.items = undefined;
+    entry.tray = undefined;
+    forget(deviceId);
     log(`${info.user} hung up`);
     void render();
   });
   try {
-    // their items as they are, and every change to them after
-    await connection.tray.state.items.subscribe(items => {
+    // their items as they are, and every change to them after - the first
+    // time whole, as the device
+    await connection.tray.state.items.subscribe((items, ops) => {
       if (entry.tray !== connection.tray) return;
-      entry.items = items;
+      changeDevices(devices.state.devices[deviceId]
+        ? prefixOps(ops, pointer(deviceId, 'items'))
+        : [{ op: 'add', path: pointer(deviceId), value: { user: info.user, items } }]);
       void render();
     });
   } catch (error) {
@@ -495,7 +520,8 @@ function unlink(deviceId: string) {
   const entry = links.get(deviceId);
   links.delete(deviceId);
   if (!entry) return;
-  entry.tray = entry.items = undefined;
+  entry.tray = undefined;
+  forget(deviceId);
   entry.close?.();
 }
 
@@ -653,25 +679,34 @@ async function toggleAutoMarkDone() {
   await saveConfig().catch(error => log(`couldn't save the settings: ${firstLine(error)}`));
   log(`automatically mark as done: ${config.autoMarkDone ? 'on' : 'off'}`);
   await render();
+  // a scan reads it as it starts: one running now goes on as it was, and the
+  // next looks over the whole inbox
   if (config.autoMarkDone) {
     inbox.forget();
-    await operation(() => refresh());
+    await refresh();
   }
 }
 
-// the log, tailed in a window - one at a time: asking again brings the one
-// that's open to the front
-let logWindow: Promise<RemoteWindow> | undefined;
-function showLog() {
-  if (logWindow) {
-    void logWindow.then(window => window.focus()).catch(() => { });
-    return;
-  }
-  const opening = logWindow = host.open(logViewer, { file: logFile(host.params.userData), title: `${appName} log` });
-  void opening
-    .then(window => window.closed.catch(() => { }), error => log(`couldn't show the log: ${firstLine(error)}`))
-    .finally(() => { if (logWindow === opening) logWindow = undefined; });
+// a window there's one of at a time: asking again brings the one that's open
+// to the front
+function single(what: string, open: () => Promise<RemoteWindow>) {
+  let opened: Promise<RemoteWindow> | undefined;
+  return () => {
+    if (opened) {
+      void opened.then(window => window.focus()).catch(() => { });
+      return;
+    }
+    const opening = opened = open();
+    void opening
+      .then(window => window.closed.catch(() => { }), error => log(`couldn't show ${what}: ${firstLine(error)}`))
+      .finally(() => { if (opened === opening) opened = undefined; });
+  };
 }
+
+// the log, tailed
+const showLog = single('the log', () => host.open(logViewer, { file: logFile(host.params.userData), title: `${appName} log` }));
+// everyone's items
+const showApprovals = single('approvals', () => host.open(approvalsWindow, { store: devices, title: appName }));
 
 tray.onEvent(event => {
   if (event.event !== 'menu-item') return;
@@ -688,6 +723,7 @@ tray.onEvent(event => {
   if (item === 'notifications') return void host.shell.openExternal(NOTIFICATIONS);
   if (item === 'auto-mark-done') return void toggleAutoMarkDone();
   if (item === 'log-viewer') return void showLog();
+  if (item === 'approvals') return void showApprovals();
   if (item === 'provider-login') return void providerLogin();
   if (item === 'provider-logout') return void operation(providerLogout);
   if (!item.startsWith('{')) return;
