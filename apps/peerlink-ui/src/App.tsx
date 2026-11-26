@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createBrowserAuth, NotSignedIn } from '@cmdless/auth-sdk/browser'
-import { dropboxApp, dropboxSignaling } from '@cmdless/peerlink-sdk'
-import type { AdvertisedOffer, Device } from '@cmdless/peerlink-sdk'
-import { connectDevice } from '@cmdless/peerlink-sdk/browser'
+import { createRtcHost, dropboxApp, dropboxSignaling } from '@cmdless/rtc-sdk/browser'
+import type { Device, RtcHost } from '@cmdless/rtc-sdk/browser'
+import type { AdvertisedOffer, LinkTarget, PeerlinkInfo } from '@cmdless/peerlink-sdk'
 import { hangarProtocol } from '@cmdless/hangar-sdk'
 import type { AgentsState, HostState } from '@cmdless/hangar-sdk'
 
@@ -12,7 +12,10 @@ const auth = createBrowserAuth({ ...dropboxApp(), redirectUri: `${window.locatio
 const signaling = dropboxSignaling(async retry => {
   if (retry) auth.expire()
   return auth.getToken()
-})
+}, reason => reason instanceof NotSignedIn)
+
+type PeerlinkDevice = Device<PeerlinkInfo>
+const offersOf = (device: PeerlinkDevice) => Object.values(device.info?.offers ?? {})
 
 function ago(iso: string) {
   const seconds = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000))
@@ -22,30 +25,33 @@ function ago(iso: string) {
   return `${Math.round(seconds / 86400)}d ago`
 }
 
-function useDevices(signedIn: boolean, signedOut: (reason: string) => void) {
-  const [devices, setDevices] = useState<Record<string, Device>>()
+// this page as a device of its own, while signed in: it watches the others
+// and connects to them, without being listed or answering anyone
+function useHost(signedIn: boolean, signedOut: (reason: string) => void) {
+  const [host, setHost] = useState<RtcHost<PeerlinkInfo>>()
+  const [devices, setDevices] = useState<Record<string, PeerlinkDevice>>()
   const [error, setError] = useState<string>()
 
   useEffect(() => {
     if (!signedIn) return
-    const watch = signaling.watchDevices({
-      onChange: setDevices,
-      onReady: () => setError(undefined),
-      onError: reason => {
-        if (reason instanceof NotSignedIn) { signedOut(reason.message); return 'stop' }
-        setError(String((reason as Error)?.message ?? reason))
-        return 'retry'
-      },
+    const started = createRtcHost<PeerlinkInfo>(signaling, {
+      deviceId: `peerlink-ui-${crypto.randomUUID()}`,
+      name: 'peerlink-ui',
+      publish: false,
+      onDevices: setDevices,
+      onError: reason => setError(reason),
+      onStopped: signedOut,
     })
-    return () => watch.stop()
+    setHost(started)
+    return () => { void started.stop() }
   }, [signedIn, signedOut])
 
-  return { devices, error }
+  return { host, devices, error }
 }
 
 // a live look at a hangar on another device, through peerlink: its host
 // state and agents, read over the hangar offer's own protocol
-function HangarView({ deviceId, device, offer }: { deviceId: string; device: Device; offer: AdvertisedOffer }) {
+function HangarView({ host: rtc, deviceId, offer }: { host: RtcHost<PeerlinkInfo>; deviceId: string; offer: AdvertisedOffer }) {
   const [phase, setPhase] = useState('Connecting through Dropbox…')
   const [host, setHost] = useState<HostState>()
   const [agents, setAgents] = useState<AgentsState>()
@@ -54,12 +60,13 @@ function HangarView({ deviceId, device, offer }: { deviceId: string; device: Dev
     let closed = false
     let close = () => { }
     ;(async () => {
-      const link = await connectDevice(signaling, deviceId, { iceServers: device.iceServers })
+      const link = await rtc.connect(deviceId)
       close = link.close
       if (closed) return close()
       link.onClose(() => setPhase('Disconnected'))
       setPhase('Opening hangar…')
-      const hangar = hangarProtocol.createClient(await link.open({ offerId: offer.id }))
+      const target: LinkTarget = { offerId: offer.id }
+      const hangar = hangarProtocol.createClient((await link.open(JSON.stringify(target))).connection())
       hangar.listen()
       await hangar.checkVersion()
       await hangar.state.host.subscribe(setHost)
@@ -67,7 +74,7 @@ function HangarView({ deviceId, device, offer }: { deviceId: string; device: Dev
       setPhase('Connected')
     })().catch(reason => setPhase(`Couldn't connect: ${reason?.message ?? reason}`))
     return () => { closed = true; close() }
-  }, [deviceId, device.iceServers, offer.id])
+  }, [rtc, deviceId, offer.id])
 
   return (
     <div className="view">
@@ -85,9 +92,9 @@ function HangarView({ deviceId, device, offer }: { deviceId: string; device: Dev
   )
 }
 
-function DeviceRow({ deviceId, device }: { deviceId: string; device: Device }) {
+function DeviceRow({ host, deviceId, device }: { host: RtcHost<PeerlinkInfo>; deviceId: string; device: PeerlinkDevice }) {
   const [open, setOpen] = useState<string>()
-  const offers = Object.values(device.offers)
+  const offers = offersOf(device)
   return (
     <section className={`device ${device.online ? 'online' : 'offline'}`}>
       <div>
@@ -114,7 +121,7 @@ function DeviceRow({ deviceId, device }: { deviceId: string; device: Device }) {
         </ul>
       )}
       {offers.filter(offer => offer.id === open).map(offer =>
-        <HangarView key={offer.id} deviceId={deviceId} device={device} offer={offer} />)}
+        <HangarView key={offer.id} host={host} deviceId={deviceId} offer={offer} />)}
     </section>
   )
 }
@@ -138,7 +145,7 @@ function App() {
   }, [])
 
   const signedOut = useMemo(() => (reason: string) => { setSignedIn(false); setProblem(reason) }, [])
-  const { devices, error } = useDevices(signedIn, signedOut)
+  const { host, devices, error } = useHost(signedIn, signedOut)
 
   const sorted = Object.entries(devices ?? {}).sort(([, a], [, b]) =>
     Number(b.online) - Number(a.online) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
@@ -156,7 +163,7 @@ function App() {
       {!signedIn && <p className="muted empty">Sign in to the Dropbox account your devices use to see them here.</p>}
       {signedIn && !devices && <p className="muted empty">Looking for devices…</p>}
       {signedIn && devices && sorted.length === 0 && <p className="muted empty">No devices yet. Start peerlink on one, and sign it in to this Dropbox account.</p>}
-      {sorted.map(([deviceId, device]) => <DeviceRow key={deviceId} deviceId={deviceId} device={device} />)}
+      {host && sorted.map(([deviceId, device]) => <DeviceRow key={deviceId} host={host} deviceId={deviceId} device={device} />)}
     </main>
   )
 }
