@@ -2,7 +2,7 @@ import type { DataChannelLike } from './pipes.js';
 import type { IceServer } from './signaling.js';
 
 // The WebRTC a host needs, from whichever implementation there is - the
-// browser's own, or werift in node. Each side's description is complete
+// browser's own, or node-datachannel in node. Each side's description is complete
 // (every candidate gathered) before it's handed over.
 export type WebRtc = { createPeer(iceServers: IceServer[]): RtcPeer };
 
