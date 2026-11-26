@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import jsonpatch from 'fast-json-patch';
 import { defineProtocol } from './protocol.js';
-import { memory } from './state.js';
+import { memory, prefixOps } from './state.js';
 import type { ChannelStorage, StateChange, StatePatch } from './state.js';
 import { createLoopbackPair, tick } from './loopback.fixture.js';
 
@@ -103,7 +103,46 @@ test('an unknown channel throws', async () => {
   assert.throws(() => store.set({ nope: 1 }), /unknown state channel: nope/);
 });
 
-// a storage that records its saves, and holds each one open until released
+test('patch applies the ops and sends those same ops on', async () => {
+  const store = await createStore();
+  const patches: StatePatch[] = [];
+  store.watch('agents', patch => patches.push(patch));
+
+  const ops = [{ op: 'add', path: '/entries/a', value: { name: 'A' } }] as const;
+  store.patch('agents', [...ops]);
+  assert.deepEqual(store.state.agents, { entries: { a: { name: 'A' } } });
+  assert.deepEqual(patches, [{ seq: 1, ops }]);
+});
+
+test('patch can replace a primitive channel whole', async () => {
+  const store = await createStore();
+  store.patch('count', [{ op: 'replace', path: '', value: 3 }]);
+  assert.equal(store.state.count, 3);
+});
+
+test('ops that do not apply throw, and change nothing', async () => {
+  const store = await createStore();
+  const patches: StatePatch[] = [];
+  store.watch('agents', patch => patches.push(patch));
+
+  assert.throws(() => store.patch('agents', [
+    { op: 'add', path: '/entries/a', value: { name: 'A' } },
+    { op: 'remove', path: '/entries/missing' },
+  ]));
+  assert.deepEqual(store.state.agents, { entries: {} });
+  assert.equal(store.seq('agents'), 0);
+  assert.deepEqual(patches, []);
+});
+
+test('mutating ops after patch does not change the store', async () => {
+  const store = await createStore();
+  const value = { name: 'A' };
+  store.patch('agents', [{ op: 'add', path: '/entries/a', value }]);
+  value.name = 'sneaky';
+  assert.deepEqual(store.state.agents, { entries: { a: { name: 'A' } } });
+});
+
+
 function recording<T>(initial: T) {
   const saves: StateChange<T>[] = [];
   const pending: (() => void)[] = [];
@@ -216,6 +255,48 @@ test('subscribe gets the current state, then every change', async () => {
 
   assert.deepEqual(seen[2], { entries: { b: { name: 'B' } } });
   assert.deepEqual(client.state.agents.current, store.state.agents);
+});
+
+test('a listener gets the ops with each state - a whole replace first', async () => {
+  const { store, connect } = await createServing();
+  store.set({ agents: { entries: { a: { name: 'A' } } } });
+  const { client } = connect();
+
+  const seen: jsonpatch.Operation[][] = [];
+  await client.state.agents.subscribe((_, ops) => seen.push(ops));
+  store.update('agents', draft => { draft.entries.b = { name: 'B' }; });
+  await until(() => seen.length === 2);
+
+  assert.deepEqual(seen, [
+    [{ op: 'replace', path: '', value: { entries: { a: { name: 'A' } } } }],
+    [{ op: 'add', path: '/entries/b', value: { name: 'B' } }],
+  ]);
+});
+
+test('a channel can be passed on as one entry of another by its ops', async () => {
+  const { store, connect } = await createServing();
+  const { client } = connect();
+  const relay = await defineProtocol(({ state }) => ({ state: { links: state<Record<string, Agents>>('links') } }))
+    .createStore({ links: memory<Record<string, Agents>>({ mine: { entries: {} } }) });
+
+  await client.state.agents.subscribe((_, ops) => relay.patch('links', prefixOps(ops, '/remote')));
+  store.set({ agents: { entries: { a: { name: 'A' } } } });
+  store.update('agents', draft => { draft.entries.a.name = 'A2'; });
+  await until(() => relay.state.links.remote?.entries.a?.name === 'A2');
+
+  assert.deepEqual(relay.state.links, { mine: { entries: {} }, remote: { entries: { a: { name: 'A2' } } } });
+});
+
+test('prefixOps moves every path, and a whole replace becomes an add', () => {
+  assert.deepEqual(prefixOps([
+    { op: 'replace', path: '', value: 1 },
+    { op: 'remove', path: '/a' },
+    { op: 'move', from: '/b', path: '/c' },
+  ], '/x'), [
+    { op: 'add', path: '/x', value: 1 },
+    { op: 'remove', path: '/x/a' },
+    { op: 'move', from: '/x/b', path: '/x/c' },
+  ]);
 });
 
 test('a primitive channel mirrors too', async () => {

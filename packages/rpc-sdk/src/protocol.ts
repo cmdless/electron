@@ -150,10 +150,10 @@ export type ServerStore<S extends Record<string, unknown>> =
   HasState<S> extends true ? RpcStore<S> : undefined;
 
 // what a server peer can do with the shared store. It's the same store for
-// every connection, so set and update change state for all of them.
+// every connection, so set, update and patch change state for all of them.
 export type ServerState<S extends Record<string, unknown>> =
   HasState<S> extends true
-  ? Pick<RpcStore<S>, 'set' | 'update'> & { readonly current: Readonly<S> }
+  ? Pick<RpcStore<S>, 'set' | 'update' | 'patch'> & { readonly current: Readonly<S> }
   : {};
 
 export type RpcClient<Channel extends RpcChannel = RpcChannel, S extends Record<string, unknown> = {}> =
@@ -195,7 +195,7 @@ function createRpcServer<Channel extends RpcChannel, S extends Record<string, un
   if (store) serveStore(connection, store);
   if (identity) serveVersion(connection, identity);
   const state = store
-    ? { get current() { return store.state; }, set: store.set, update: store.update }
+    ? { get current() { return store.state; }, set: store.set, update: store.update, patch: store.patch }
     : {};
   return { ...peer(channel, connection), state: state as ServerState<S> };
 }
