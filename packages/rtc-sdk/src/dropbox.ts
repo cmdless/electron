@@ -4,10 +4,10 @@
 import { fileSignaling } from './providers.js';
 import type { FileChange, SignalFiles, SignalingProvider } from './providers.js';
 
-// peerlink's own Dropbox app - its key is public, as PKCE allows
+// cmdless's own Dropbox app (peerlink's) - its key is public, as PKCE allows
 export const DROPBOX_APP_KEY = '6bvilhwtvusnqaa';
 
-// where peerlink's own app sends a sign-in back
+// where cmdless's own app sends a sign-in back
 export const DROPBOX_REDIRECT_URI = 'http://localhost/cmdless-auth';
 
 // a Dropbox app to sign in to: peerlink's own, or one of yours - its app key,
@@ -198,8 +198,11 @@ export function dropboxFiles(dropbox: Dropbox): SignalFiles {
 }
 
 // signaling through a Dropbox app folder. getToken is the Dropbox client's
-// (see createDropbox); a refused or missing token needs a sign-in.
-export function dropboxSignaling(getToken: (retry: boolean) => Promise<string>): SignalingProvider {
+// (see createDropbox); a refused or missing token needs a sign-in - and so
+// does anything else signedOut says does (whatever getToken throws for it).
+export function dropboxSignaling(getToken: (retry: boolean) => Promise<string>, signedOut?: (error: unknown) => boolean): SignalingProvider {
   return fileSignaling(dropboxFiles(createDropbox(getToken)), error =>
-    (error instanceof DropboxError && error.status === 401) || String((error as Error)?.message ?? error).includes('not signed in'));
+    (error instanceof DropboxError && error.status === 401)
+    || String((error as Error)?.message ?? error).includes('not signed in')
+    || !!signedOut?.(error));
 }

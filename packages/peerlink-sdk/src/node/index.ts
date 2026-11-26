@@ -4,7 +4,6 @@ import { peerlinkProtocol } from '../index.js';
 import type { OfferParams } from '../index.js';
 
 export * from '../index.js';
-export * from './folder.js';
 
 // one daemon per user: the socket is both the lock and where clients connect
 export function getPeerlinkSocketPath() {
