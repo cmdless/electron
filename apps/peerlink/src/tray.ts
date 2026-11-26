@@ -2,7 +2,7 @@ import { UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteTray, TrayMenuItem } from '@cmdless/ui-sdk/node';
 import type { RpcStore } from '@cmdless/rpc-sdk';
 import type { AccountState, Device, HostState, Offer, SettingsState } from '@cmdless/peerlink-sdk';
-import { providerLabel } from './settings.js';
+import { accountOf, providerLabel } from '@cmdless/rtc-sdk';
 
 type PeerlinkStore = RpcStore<{
   host: HostState;
@@ -99,7 +99,7 @@ export function showTrayWhileSet(store: PeerlinkStore, actions: TrayActions) {
           { id: 'device', label: `peerlink - ${settings.deviceName}`, enabled: false },
           { type: 'separator' },
           { id: 'account', label: accountLabel(account, providerLabel(settings.provider)), enabled: false },
-          ...settings.provider.kind !== 'dropbox' ? [] : [signedIn
+          ...!accountOf(settings.provider) ? [] : [signedIn
             ? { id: 'sign-out', label: 'Sign Out' }
             : { id: 'sign-in', label: 'Sign In', enabled: account.status === 'signed-out' }],
         ],

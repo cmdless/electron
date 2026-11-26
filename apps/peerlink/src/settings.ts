@@ -1,8 +1,8 @@
 import os from 'node:os';
 import path from 'node:path';
 import { getAppDataPath } from '@cmdless/core/node';
-import type { ProviderSettings, SettingsState, SettingsUpdate } from '@cmdless/peerlink-sdk';
-import { DEFAULT_HEARTBEAT_SECONDS, DEFAULT_ICE_SERVERS } from '@cmdless/rtc-sdk';
+import type { SettingsState, SettingsUpdate } from '@cmdless/peerlink-sdk';
+import { DEFAULT_HEARTBEAT_SECONDS, DEFAULT_ICE_SERVERS, validProvider } from '@cmdless/rtc-sdk';
 
 // settings.json: the daemon's while it runs (it reads it once and writes it
 // whole on every change), anyone's while it doesn't
@@ -33,26 +33,3 @@ export function validSettings(update: SettingsUpdate): SettingsUpdate {
     ...(provider !== undefined && { provider }),
   };
 }
-
-function validProvider(provider: ProviderSettings) {
-  switch (provider?.kind) {
-    case 'dropbox':
-      if (provider.appKey !== undefined && (typeof provider.appKey !== 'string' || !provider.appKey.trim()))
-        throw new Error('a Dropbox app key can\'t be empty');
-      if (provider.redirectUri !== undefined) {
-        if (provider.appKey === undefined) throw new Error('a redirect URI goes with an app key');
-        if (!URL.canParse(provider.redirectUri)) throw new Error(`${provider.redirectUri} isn't a URL`);
-      }
-      return;
-    case 'folder':
-      if (typeof provider.path !== 'string' || !path.isAbsolute(provider.path))
-        throw new Error('a folder provider needs a full path');
-      return;
-    default:
-      throw new Error('the provider is dropbox or folder');
-  }
-}
-
-// what people call it
-export const providerLabel = (provider: ProviderSettings) =>
-  provider.kind === 'dropbox' ? (provider.appKey ? `Dropbox (app ${provider.appKey})` : 'Dropbox') : provider.path;
