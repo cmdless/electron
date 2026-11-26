@@ -54,7 +54,9 @@ async function requestTokens(provider: OAuthProvider, form: Record<string, strin
   const response = await fetch(provider.tokenUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: provider.clientId, ...form }),
+    // the scopes again, for providers (Microsoft's) that want them on every
+    // token request
+    body: new URLSearchParams({ client_id: provider.clientId, ...provider.scopes?.length && { scope: provider.scopes.join(' ') }, ...form }),
   });
   const body = await response.json().catch(() => ({})) as TokenResponse;
   if (!response.ok || !body.access_token) {
