@@ -1,6 +1,6 @@
 # @cmdless/peerlink
 
-The peerlink daemon: it advertises what this device offers to the other devices on the same provider, keeps up with what they offer, and answers their connections over WebRTC. Programs offer themselves through `@cmdless/peerlink-sdk`'s `offer()`, which starts the daemon if it isn't running.
+The peerlink daemon: one [RTC host](../../packages/rtc-sdk) per device, with a registry of offers on top. It advertises what this device offers to the other devices on the same provider, keeps up with what they offer, and relays each channel they open to the offer it names (`{ offerId }` as the channel's label), on to that offer's local WebSocket. Programs offer themselves through `@cmdless/peerlink-sdk`'s `offer()`, which starts the daemon if it isn't running.
 
 ## Commands
 
@@ -23,7 +23,7 @@ The provider is what carries each device's advertisement and the WebRTC offers a
 - **Dropbox** (the default) — everything goes in the Dropbox app's own App folder, so it's devices signed in to the same Dropbox *account* through the same *app*. Without an app key it's peerlink's own app. An app of your own needs App folder access, and is given with one of its registered redirect URIs — any of them: nothing has to answer there, since the sign-in window catches the redirect before it's requested. Left out, it's `http://localhost/cmdless-auth`. Dropbox has no way to look an app's redirect URIs up, so it has to be given. Each app key is its own sign-in.
 - **Folder** — a folder every device can write to, such as one OneDrive, Dropbox or another sync client keeps in step across machines. There's no account: whoever can write the folder is in the group. Changes are noticed through the OS's file events, so a network share that doesn't send them won't work, and a sync client adds its own delay — a few seconds, which signaling doesn't mind.
 
-Both lay it out the same way: `devices/<deviceId>.json` for each advertisement, and `signal/<deviceId>/<sessionId>.offer.json` with its `.answer.json` beside it for each connection, removed once it's up. Providers are `SignalingProvider`s in `@cmdless/peerlink-sdk` — the interface is presence and offers and answers, not files, so a provider can carry them however it likes.
+The providers are [`@cmdless/rtc-sdk`](../../packages/rtc-sdk)'s; what the daemon advertises is its offers, in its advertisement's `info`.
 
 ## The tray
 

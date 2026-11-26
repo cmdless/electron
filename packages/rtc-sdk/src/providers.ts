@@ -1,12 +1,11 @@
-import { answerPath, offerPath, signalFolder, SIGNAL_TTL_MS } from './signaling.js';
-import type { SignalAnswer, SignalOffer } from './signaling.js';
-import { DEVICES_FOLDER, advertisementPath, isOnline } from './index.js';
-import type { Advertisement, Device } from './index.js';
+import { advertisementPath, answerPath, DEVICES_FOLDER, isOnline, offerPath, signalFolder, SIGNAL_TTL_MS } from './signaling.js';
+import type { Advertisement, Device, SignalAnswer, SignalOffer } from './signaling.js';
 
-// what keeps the devices in touch: each one's advertisement, and the WebRTC
-// offers and answers between them. How it's carried - Dropbox, a shared
-// folder, anything else - is the provider's business: it watches however it
-// can, and nobody above it sees a file.
+// what keeps devices in touch: each one's advertisement, and the WebRTC
+// offers and answers between them. How it's carried - in memory, a shared
+// folder, Dropbox, anything else - is the provider's business: it watches
+// however it can, and nobody above it sees a file. Devices see each other
+// when their hosts use the same one.
 export type SignalingProvider = {
   // this device's advertisement, written for the others (again, each time)
   publish(advertisement: Advertisement): Promise<void>;
@@ -26,7 +25,7 @@ export type Watch = { stop(): void };
 export type ErrorHandler = (error: unknown) => 'stop' | 'retry';
 
 export type DeviceWatchOptions = {
-  // left out of what's reported - a daemon doesn't list itself
+  // left out of what's reported - a host doesn't list itself
   ownDeviceId?: string;
   onChange: (devices: Record<string, Device>) => void;
   onError?: ErrorHandler;
@@ -54,18 +53,14 @@ const toDevice = (advertisement: Advertisement): Device => ({
   name: advertisement.name,
   updatedAt: advertisement.updatedAt,
   online: isOnline(advertisement),
-  offers: advertisement.offers,
   iceServers: advertisement.iceServers ?? [],
+  info: advertisement.info,
 });
 
 // the most often any device writes, so a missed heartbeat shows up in time
 const ONLINE_CHECK_MS = 15_000;
 
-// a provider that carries everything as files:
-//
-//   /devices/<deviceId>.json                    each device's advertisement
-//   /signal/<deviceId>/<sessionId>.offer.json   an offer to that device
-//   /signal/<deviceId>/<sessionId>.answer.json  its answer
+// a provider that carries everything as files, laid out as signaling.ts says
 export function fileSignaling(files: SignalFiles, needsPerson: (error: unknown) => boolean): SignalingProvider {
   return {
     needsPerson,
@@ -91,7 +86,10 @@ export function fileSignaling(files: SignalFiles, needsPerson: (error: unknown) 
             continue;
           }
           try {
-            advertisements.set(deviceId, JSON.parse(await files.read(`${DEVICES_FOLDER}/${name}`)) as Advertisement);
+            const advertisement = JSON.parse(await files.read(`${DEVICES_FOLDER}/${name}`)) as Advertisement;
+            // one written by a version that doesn't speak this one
+            if (advertisement.version !== 2) continue;
+            advertisements.set(deviceId, advertisement);
           } catch (error) {
             // one unreadable file doesn't stop the rest
             console.error(`peerlink: couldn't read ${name}:`, error);

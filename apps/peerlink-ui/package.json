@@ -24,6 +24,7 @@
     "@cmdless/auth-sdk": "*",
     "@cmdless/hangar-sdk": "*",
     "@cmdless/peerlink-sdk": "*",
+    "@cmdless/rtc-sdk": "*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },

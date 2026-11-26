@@ -17,18 +17,6 @@
       "types": "./dist/node/index.d.ts",
       "import": "./dist/node/index.js"
     },
-    "./browser": {
-      "types": "./dist/browser/index.d.ts",
-      "import": "./dist/browser/index.js"
-    },
-    "./ws": {
-      "types": "./dist/ws/index.d.ts",
-      "import": "./dist/ws/index.js"
-    },
-    "./ws/node": {
-      "types": "./dist/ws/node/index.d.ts",
-      "import": "./dist/ws/node/index.js"
-    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
@@ -46,6 +34,7 @@
   },
   "dependencies": {
     "@cmdless/core": "*",
-    "@cmdless/rpc-sdk": "*"
+    "@cmdless/rpc-sdk": "*",
+    "@cmdless/rtc-sdk": "*"
   }
 }

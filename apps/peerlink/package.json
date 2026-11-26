@@ -31,8 +31,8 @@
     "@cmdless/core": "*",
     "@cmdless/peerlink-sdk": "*",
     "@cmdless/rpc-sdk": "*",
+    "@cmdless/rtc-sdk": "*",
     "@cmdless/ui-sdk": "*",
-    "werift": "0.25.1",
     "ws": "8.21.3"
   },
   "exports": {

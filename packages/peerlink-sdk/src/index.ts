@@ -1,9 +1,9 @@
 import { defineProtocol } from '@cmdless/rpc-sdk';
+import type { IceServer } from '@cmdless/rtc-sdk';
 
-export * from './dropbox.js';
-export * from './providers.js';
-export * from './pipes.js';
-export * from './signaling.js';
+// Peerlink is one RTC host per device (@cmdless/rtc-sdk) with a registry of
+// offers on top: what it advertises is its offers, and a channel opened to
+// it names the offer it's for.
 
 // an offer as this device keeps it - its address never leaves the machine
 export type Offer = {
@@ -18,8 +18,6 @@ export type Offer = {
 
 // an offer as other devices see it: no address
 export type AdvertisedOffer = Omit<Offer, 'address'>;
-
-export type IceServer = { urls: string | string[]; username?: string; credential?: string };
 
 // what carries this device's advertisement and its signaling - one at a
 // time: Dropbox (peerlink's own app, or yours by its key and a redirect URI
@@ -44,27 +42,12 @@ export type SettingsState = {
   provider: ProviderSettings;
 };
 
-// what this device tells the others through the provider, never an address
-export type Advertisement = {
-  version: 1;
-  deviceId: string;
-  name: string;
-  updatedAt: string;
-  heartbeatSeconds: number;
-  // false once the daemon shut down cleanly
-  online: boolean;
-  offers: Record<string, AdvertisedOffer>;
-  // the STUN/TURN servers to reach this device with
-  iceServers: IceServer[];
-};
+// what a device's host advertises about it - its offers, never their addresses
+export type PeerlinkInfo = { offers: Record<string, AdvertisedOffer> };
 
-export const DEVICES_FOLDER = '/devices';
-export const advertisementPath = (deviceId: string) => `${DEVICES_FOLDER}/${deviceId}.json`;
-
-// whether a device's advertisement says it's there now
-export function isOnline(advertisement: Pick<Advertisement, 'online' | 'updatedAt' | 'heartbeatSeconds'>, now = Date.now()) {
-  return advertisement.online && now - Date.parse(advertisement.updatedAt) < advertisement.heartbeatSeconds * 3_000;
-}
+// what a data channel opens on a device: one of its offers, or an address
+// one of its offers has (learned through that offer's own protocol)
+export type LinkTarget = { offerId: string } | { address: string };
 
 // another device, as this one sees it
 export type Device = {

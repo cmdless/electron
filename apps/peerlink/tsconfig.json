@@ -26,6 +26,9 @@
     },
     {
       "path": "../../packages/ui-sdk"
+    },
+    {
+      "path": "../../packages/rtc-sdk"
     }
   ]
 }

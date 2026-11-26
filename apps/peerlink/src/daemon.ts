@@ -3,11 +3,13 @@ import { isPendingService, listenExclusive, rejectService, resolveService } from
 import type { DaemonService } from '@cmdless/core/node';
 import { memory } from '@cmdless/rpc-sdk';
 import { createSocketServer, file } from '@cmdless/rpc-sdk/node';
-import { dropboxApp, dropboxSignaling, folderSignaling, getPeerlinkSocketPath, peerlinkProtocol } from '@cmdless/peerlink-sdk/node';
-import type { AccountState, OfferParams, ProviderSettings } from '@cmdless/peerlink-sdk';
+import { getPeerlinkSocketPath, peerlinkProtocol } from '@cmdless/peerlink-sdk/node';
+import type { AccountState, Device, OfferParams, PeerlinkInfo, ProviderSettings } from '@cmdless/peerlink-sdk';
+import { createRtcHost, dropboxApp, dropboxSignaling, folderSignaling } from '@cmdless/rtc-sdk/node';
+import type { Device as RtcDevice, RtcHost } from '@cmdless/rtc-sdk/node';
 import { ensureAuth, providerKey } from '@cmdless/auth-sdk/node';
 import type { ProviderStatus } from '@cmdless/auth-sdk/node';
-import { createSync } from './sync.js';
+import { relay, targetOf } from './links.js';
 import { defaultSettings, providerLabel, settingsPath, validSettings } from './settings.js';
 import { showTrayWhileSet } from './tray.js';
 
@@ -87,34 +89,57 @@ async function main() {
     return dropboxSignaling(async () => (await auth.request.getToken({ provider: app, interactive: false })).accessToken);
   };
 
-  function createSyncFor(provider: ProviderSettings) {
-    return createSync({
-      provider: signalingFor(provider),
-      settings: () => store.state.settings,
-      offers: () => store.state.offers,
-      setDevices: devices => { void store.set({ devices }); },
-      onStopped: reason => { void setAccount({ status: 'signed-out', error: reason }); },
-      onError: reason => { void setAccount(reason ? { status: 'error', error: reason } : { status: 'syncing' }); },
-      // a device that connects may open one of this device's offers, or an
-      // address one of them has - nothing else
-      resolveTarget: target => {
-        const offers = Object.values(store.state.offers);
-        if ('offerId' in target) return store.state.offers[target.offerId]?.address;
-        return offers.some(offer => offer.address === target.address) ? target.address : undefined;
-      },
-    });
-  }
+  // what this device advertises: its offers, without their addresses
+  const advertised = (): PeerlinkInfo => ({
+    offers: Object.fromEntries(Object.values(store.state.offers).map(({ id, kind, name }) => [id, { id, kind, name }])),
+  });
+  const asDevices = (devices: Record<string, RtcDevice<PeerlinkInfo>>) => Object.fromEntries(
+    Object.entries(devices).map(([id, { info, ...device }]): [string, Device] => [id, { ...device, offers: info?.offers ?? {} }]));
 
-  // one provider at a time: the one the settings name
+  // a device that connects may open one of this device's offers, or an
+  // address one of them has - nothing else
+  const resolveTarget = (label: string) => {
+    const target = targetOf(label);
+    if (!target) return undefined;
+    if ('offerId' in target) return store.state.offers[target.offerId]?.address;
+    return Object.values(store.state.offers).some(offer => offer.address === target.address) ? target.address : undefined;
+  };
+
+  // the RTC host, while it syncs - one provider at a time: the one the
+  // settings name
+  let host: RtcHost<PeerlinkInfo> | undefined;
   let using = '';
-  let sync = createSyncFor(store.state.settings.provider);
   // the broker's sign-ins, as last heard
   let brokered: Record<string, ProviderStatus> = {};
 
   const startSync = () => {
-    if (sync.running) return;
+    if (host) return;
     void setAccount({ status: 'syncing' });
-    sync.start();
+    const settings = store.state.settings;
+    const started: RtcHost<PeerlinkInfo> = host = createRtcHost<PeerlinkInfo>(signalingFor(settings.provider), {
+      deviceId: settings.deviceId,
+      name: settings.deviceName,
+      iceServers: settings.iceServers,
+      heartbeatSeconds: settings.heartbeatSeconds,
+      info: advertised(),
+      accept: channel => {
+        const address = resolveTarget(channel.label);
+        if (!address) return false;
+        relay(channel.pipe, address);
+      },
+      onDevices: devices => { void store.set({ devices: asDevices(devices) }); },
+      onError: reason => { void setAccount(reason ? { status: 'error', error: reason } : { status: 'syncing' }); },
+      // a refused or missing token: it's stopped itself
+      onStopped: reason => {
+        if (host === started) host = undefined;
+        void setAccount({ status: 'signed-out', error: reason });
+      },
+    });
+  };
+  const stopSync = async (offline: boolean) => {
+    const stopping = host;
+    host = undefined;
+    await stopping?.stop({ offline });
   };
 
   // syncs while the provider's account lets it: a folder always, Dropbox
@@ -123,8 +148,8 @@ async function main() {
     const app = appOf(store.state.settings.provider);
     const signIn = app ? brokered[providerKey(app)] : { status: 'signed-in' as const };
     if (signIn?.status === 'signed-in') startSync();
-    else if (signIn?.status === 'signed-out' && sync.running) {
-      void sync.stop(false);
+    else if (signIn?.status === 'signed-out' && host) {
+      void stopSync(false);
       void setAccount({ status: 'signed-out', error: signIn.error });
     }
   }
@@ -139,8 +164,7 @@ async function main() {
     const first = using === '';
     using = key;
     if (!first) {
-      await sync.stop(true);
-      sync = createSyncFor(provider);
+      await stopSync(true);
       await setAccount({ status: 'signed-out' });
       console.error(`peerlink: now syncing through ${providerLabel(provider)}`);
     }
@@ -163,7 +187,7 @@ async function main() {
   async function signOut() {
     const app = appOf(store.state.settings.provider);
     if (!app) throw new Error(`${providerLabel(store.state.settings.provider)} has no account to sign out of`);
-    await sync.stop(true);
+    await stopSync(true);
     await auth.request.signOut({ provider: app });
     await setAccount({ status: 'signed-out' });
   }
@@ -176,9 +200,10 @@ async function main() {
 
   // anything in the advertisement changing gets written right away - and the
   // provider changing switches to it
-  store.watch('offers', () => sync.changed());
+  store.watch('offers', () => host?.update({ info: advertised() }));
   store.watch('settings', () => {
-    sync.changed();
+    const { deviceName, iceServers, heartbeatSeconds } = store.state.settings;
+    host?.update({ name: deviceName, iceServers, heartbeatSeconds });
     void useProvider();
   });
 
@@ -191,7 +216,7 @@ async function main() {
     stopping = true;
     // tells the other devices this one is gone, rather than leaving them to
     // notice the heartbeat stop - but never holds up shutting down for long
-    await Promise.race([sync.stop(true), new Promise(resolve => setTimeout(resolve, 3_000))]);
+    await Promise.race([stopSync(true), new Promise(resolve => setTimeout(resolve, 3_000))]);
     tray.dispose();
     auth.dispose();
     lock.close();
