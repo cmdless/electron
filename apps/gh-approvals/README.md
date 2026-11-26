@@ -9,9 +9,9 @@ gh-approvals set provider <provider>...
 
 - `--user` — the GitHub account it runs for. [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
 - `--org` — only what's in this owner's repositories. Repeat it for more.
-- `set provider` — what the trays find each other through, kept in `config.json` for every run after: `folder <path>`, `onedrive <tenant id> <client id> [<drive> [<redirect URI>]]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items. It's refused while the tray runs. To set it and start: `gh-approvals set provider folder ~/OneDrive/team && gh-approvals --user <login>`.
+- `set provider` — what the trays find each other through, kept in `config.json` for every run after: `folder <path>`, `graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items. It's refused while the tray runs. To set it and start: `gh-approvals set provider folder ~/OneDrive/team && gh-approvals --user <login>`.
 
-For a team on OneDrive, the drive is one everyone can reach — `/sites/{siteId}/drive` (a SharePoint site's library) or `/drives/{driveId}` — not `/me/drive`, which is each user's own. The trays signal in the app's App folder on it.
+For a team through Microsoft Graph, the App folder is one everyone can reach — a SharePoint site's (`site <site id>`) or a document library's (`drive <drive id>`) — not `personal`, which is each user's own.
 
 ## What it checks
 
@@ -27,7 +27,7 @@ Every request is conditional on what GitHub answered last, kept in `github-cache
 
 While it's signed in and has a provider, a tray is a device on it — an [RTC host](../../packages/rtc-sdk) — and the trays reach each other over WebRTC, not by host name: on one network by their local addresses, across networks through STUN. The provider only carries their advertisements and the offers and answers that connect them; nothing of anyone's items is written there. Anyone who can write where it signals can reach every running tray; that's the trust.
 
-A provider with an account (OneDrive, Dropbox) is signed in to through the [auth broker](../../apps/auth), which keeps the sign-in for every run after. Until it is, **Login to OneDrive...** stands where **Users** would; once it is, **Users** takes its place, and **Logout of OneDrive** is at the end of the account menu.
+A provider with an account (Microsoft's, Dropbox's) is signed in to through the [auth broker](../../apps/auth), which keeps the sign-in for every run after. Until it is, **Login to OneDrive...** (or SharePoint, or Dropbox) stands where **Users** would; once it is, **Users** takes its place, and **Logout of OneDrive** is at the end of the account menu.
 
 Each tray serves its user's items as a state channel, and connects to every other running tray — once each time that tray runs — to follow theirs: the whole list when it connects, then each change as it's made. Someone is listed under **Users** only while that connection is open, and with what all their trays have, so the same user on two machines is listed once. A tray that quits hangs up on everyone, and one that's gone quiet is marked offline after three missed heartbeats (three minutes). A tray that couldn't be reached isn't tried again until it runs again. Each machine is its own device, with its own id in `config.json`; your own other machines' trays aren't listed, since they have the same items.
 
