@@ -4,7 +4,6 @@ import path from 'node:path';
 // Each user's folder in the data folder, written only by that user's tray
 // and read by everyone's:
 //
-//   {user}/user.json                                 their tray, while it runs
 //   {user}/pull_requests/{owner}/{repo}/{number}.json
 //   {user}/deployments/{owner}/{repo}/{runId}.json
 //
@@ -40,14 +39,6 @@ export type DeploymentItem = {
 };
 
 export type Item = PullRequestItem | DeploymentItem;
-
-// a tray that's running: the token that gets a request to it through, where
-// it listens, and when it last changed its files
-export type UserFile = {
-  token: string;
-  endpoint: { host: string; port: number };
-  lastUpdatedAt: string;
-};
 
 const KIND_FOLDERS = { 'pull-request': 'pull_requests', deployment: 'deployments' } as const;
 
@@ -142,34 +133,4 @@ export class OwnItems {
       relative = path.dirname(relative);
     }
   }
-}
-
-const userFile = (folder: string, user: string) => path.join(folder, user, 'user.json');
-
-export function writeUserFile(folder: string, user: string, file: UserFile) {
-  return writeAtomic(userFile(folder, user), `${JSON.stringify(file, null, 2)}\n`);
-}
-
-export function removeUserFile(folder: string, user: string) {
-  return fs.rm(userFile(folder, user), { force: true });
-}
-
-// a user's tray, if it's running - or nothing, if user.json isn't there (or
-// isn't one)
-export async function readUserFile(folder: string, user: string): Promise<UserFile | undefined> {
-  try {
-    const file = JSON.parse(await fs.readFile(userFile(folder, user), 'utf8')) as Partial<UserFile>;
-    const { token, endpoint, lastUpdatedAt } = file;
-    if (typeof token !== 'string' || typeof lastUpdatedAt !== 'string') return undefined;
-    if (typeof endpoint?.host !== 'string' || typeof endpoint.port !== 'number') return undefined;
-    return { token, endpoint, lastUpdatedAt };
-  } catch {
-    return undefined;
-  }
-}
-
-// the users with a folder in the data folder
-export async function listUsers(folder: string) {
-  const entries = await fs.readdir(folder, { withFileTypes: true });
-  return entries.filter(entry => entry.isDirectory() && !entry.name.startsWith('.')).map(entry => entry.name);
 }

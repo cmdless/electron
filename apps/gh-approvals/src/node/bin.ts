@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -9,13 +8,15 @@ import { UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteWindow, TrayMenuItem, TrayParams } from '@cmdless/ui-sdk/node';
 import { ghInstalled, startLogin, tokenFor } from './accounts.js';
 import { approveDeployment, approvePullRequest } from './approvals.js';
-import { listUsers, OwnItems, readItems, readUserFile, removeUserFile, writeAtomic, writeUserFile } from './files.js';
-import type { Item, UserFile } from './files.js';
+import { OwnItems, readItems, writeAtomic } from './files.js';
+import type { Item } from './files.js';
 import { GitHub } from './github.js';
 import type { RateLimit } from './github.js';
 import { DEFAULT_POLL_SECONDS, Inbox } from './inbox.js';
-import { connect, listen, newToken } from './peers.js';
-import type { Peer, SentItem } from './peers.js';
+import { connect, PEER_LABEL, serve } from './peers.js';
+import type { Peer, SentItem, TrayInfo } from './peers.js';
+import { createRtcHost, folderSignaling } from '@cmdless/rtc-sdk/node';
+import type { RtcHost } from '@cmdless/rtc-sdk/node';
 import { createLog, logFile } from './log.js';
 import { coalesce, firstLine } from './util.js';
 import { logViewer } from './logViewer.js';
@@ -94,17 +95,15 @@ const saveConfig = () => writeAtomic(configFile, `${JSON.stringify(config, null,
 const own = new OwnItems(folder, user);
 let mine: Item[] = await own.load();
 
-// everyone else whose tray is running - their user.json, and their items as
-// their folder has them
-type Other = { user: string; file: UserFile; items: Item[] };
+// everyone else whose tray is running - what it says about itself, and their
+// items as their folder has them
+type Other = { user: string; info: TrayInfo; items: Item[] };
 let others = new Map<string, Other>();
-// a connection to each of them, by user: made once for each user.json - its
-// token and where it listens - and not tried again until that changes, as it
-// does when their tray restarts. Only someone whose connection is open is
-// listed: a tray that stopped without taking its user.json away isn't.
-type Link = { key: string; peer?: Peer };
+// a connection to each of them, by user: made once for each run of their
+// tray, and not tried again until it's run again. Only someone whose
+// connection is open is listed.
+type Link = { session: string; peer?: Peer; close?: () => void };
 const links = new Map<string, Link>();
-const linkKey = ({ token: presented, endpoint: at }: UserFile) => `${presented}@${at.host}:${at.port}`;
 const peerOf = (name: string) => links.get(name)?.peer;
 const running = () => [...others.values()]
   .filter(other => peerOf(other.user))
@@ -138,11 +137,12 @@ const actionId = (action: Action) => JSON.stringify(action);
 
 const titled = (title: string) => title.length > TITLE_LENGTH ? `${title.slice(0, TITLE_LENGTH - 1)}…` : title;
 
-// the tray's listener, its token, and where it says it is - only while gh
-// is signed in as this user, which is when the tray takes part at all
-let listener: Awaited<ReturnType<typeof listen>> | undefined;
-let token = '';
-let endpoint = { host: os.hostname(), port: 0 };
+// the tray as a device on the data folder - only while gh is signed in as
+// this user, which is when the tray takes part at all. Its signaling lives in
+// the folder's .rtc, beside everyone's items.
+let rtc: RtcHost<TrayInfo> | undefined;
+const signaling = folderSignaling(path.join(folder, '.rtc'));
+const session = crypto.randomUUID();
 
 // Check Now, with GitHub's rate limit beside it: what's left this hour of
 // how much, and what the last refresh cost of how many requests it made
@@ -158,7 +158,7 @@ function checkNowLabel() {
 function menu(): TrayMenuItem[] {
   const usable = !busy && !ghMissing;
   // nothing of anyone's shows until gh is signed in as this user
-  const online = listener !== undefined;
+  const online = rtc !== undefined;
   const peers = running();
 
   // approving it - a deployment one environment at a time: this user's with
@@ -228,7 +228,6 @@ function menu(): TrayMenuItem[] {
     ...(ghMissing || signedIn === undefined ? [] : [signedIn
       ? {
         type: 'submenu', label: `Logged in as ${user}`, enabled: !busy, submenu: [
-          { id: 'listening', label: `Listening on ${endpoint.host}:${endpoint.port}...`, enabled: false },
           { type: 'separator' },
           { id: 'notification-settings', label: 'GitHub Notification settings...' },
           { id: 'notifications', label: 'GitHub Notifications...' },
@@ -265,42 +264,48 @@ function menu(): TrayMenuItem[] {
 const tray = await host.createTray({ icon: icons.syncing, tooltip: `Checking ${user}'s inbox…`, menu: menu() });
 const render = (changes: Partial<TrayParams> = {}) => tray.update({ ...changes, menu: menu() });
 
-// user.json says this tray is running, where, and when its files last
-// changed - keeping the time from before if they haven't since
-let lastUpdatedAt = (await readUserFile(folder, user))?.lastUpdatedAt ?? new Date().toISOString();
-const writeOwnUserFile = () => writeUserFile(folder, user, { token, endpoint, lastUpdatedAt });
+// when this user's files last changed - the others re-read them when it does
+let lastUpdatedAt = new Date().toISOString();
 
-// signed in as this user: the tray starts listening - other trays ask it to
-// refresh, and send it things - and says where in user.json
-async function goOnline() {
-  if (listener) return;
-  token = newToken();
-  listener = await listen(token, {
-    refresh: from => {
-      log(`${from} asked for a refresh`);
-      void refresh();
+// signed in as this user: the tray joins the others - they see it, connect to
+// it to ask it things, and it connects to them
+function goOnline() {
+  if (rtc) return;
+  rtc = createRtcHost<TrayInfo>(signaling, {
+    deviceId: user,
+    name: user,
+    info: { lastUpdatedAt, session },
+    accept: channel => {
+      if (channel.label !== PEER_LABEL) return false;
+      serve(channel, {
+        refresh: from => {
+          log(`${from} asked for a refresh`);
+          void refresh();
+        },
+        requestApproval: (from, item) => void approvalRequested(from, item).catch(async error => {
+          await render({ tooltip: `${from} asked for an approval, but it couldn't be shown: ${firstLine(error)}` });
+        }),
+        approve: approveFor,
+      });
     },
-    requestApproval: (from, item) => void approvalRequested(from, item).catch(async error => {
-      await render({ tooltip: `${from} asked for an approval, but it couldn't be shown: ${firstLine(error)}` });
-    }),
-    approve: approveFor,
+    // someone coming, going, or changing their files
+    onDevices: () => void scanUsers().then(() => render()).catch(error => log(`couldn't look at the others: ${firstLine(error)}`)),
+    onError: reason => { if (reason) log(`sharing through ${folder}: ${reason}`); },
   });
-  endpoint = { host: os.hostname(), port: listener.port };
-  await writeOwnUserFile();
-  log(`listening on ${endpoint.host}:${endpoint.port}`);
+  log(`sharing through ${folder}`);
 }
 
-// not signed in (or leaving): user.json goes, then every connection - theirs
-// to this tray and this tray's to them - so everyone drops it straight away
+// not signed in (or leaving): every connection goes - theirs to this tray and
+// this tray's to them - so everyone drops it straight away, and it's marked
+// offline
 async function goOffline() {
-  if (!listener) return;
-  const closing = listener;
-  listener = undefined;
-  await removeUserFile(folder, user).catch(() => { });
-  closing.close();
+  if (!rtc) return;
+  const stopping = rtc;
+  rtc = undefined;
   for (const name of [...links.keys()]) unlink(name);
   others = new Map();
-  log('stopped listening');
+  await stopping.stop();
+  log('stopped sharing');
 }
 
 let leaving = false;
@@ -361,46 +366,48 @@ function broadcastRefresh() {
   for (const other of running()) void peerOf(other.user)?.request.refresh().catch(() => { });
 }
 
-// the users' folders: who's running, and - for anyone whose files changed
-// since last time - what they have
-async function scanUsers() {
-  const names = (await listUsers(folder)).filter(name => name !== user);
+// the others: who's running, and - for anyone whose files changed since last
+// time - what they have. One look at a time.
+let scanning: Promise<void> = Promise.resolve();
+const scanUsers = () => scanning = scanning.catch(() => { }).then(scanUsersOnce);
+async function scanUsersOnce() {
+  const devices = rtc?.devices ?? {};
   const next = new Map<string, Other>();
-  await Promise.all(names.map(async name => {
-    const file = await readUserFile(folder, name);
-    if (!file) return;
+  await Promise.all(Object.entries(devices).map(async ([name, device]) => {
+    if (name === user || !device.online || !device.info?.session) return;
     const before = others.get(name);
-    const same = before && before.file.lastUpdatedAt === file.lastUpdatedAt && before.file.token === file.token;
-    next.set(name, { user: name, file, items: same ? before.items : await readItems(folder, name) });
+    const same = before?.info.lastUpdatedAt === device.info.lastUpdatedAt;
+    next.set(name, { user: name, info: device.info, items: same ? before!.items : await readItems(folder, name) });
   }));
   others = next;
-  // the connections follow the files: anyone gone, or with a new user.json,
-  // is hung up on - and anyone not connected to yet is
-  for (const [name, { key }] of [...links]) {
-    const other = others.get(name);
-    if (!other || linkKey(other.file) !== key) unlink(name);
+  // the connections follow: anyone gone, or run again, is hung up on - and
+  // anyone not connected to yet is
+  for (const [name, { session: theirs }] of [...links]) {
+    if (others.get(name)?.info.session !== theirs) unlink(name);
   }
   await Promise.all([...others.values()].filter(other => !links.has(other.user)).map(link));
 }
 
-// connects to another tray, once for its user.json: listed while it's open,
-// and not tried again if it fails or closes until their user.json changes
+// connects to another tray, once a run of it: listed while it's open, and not
+// tried again if it fails or closes until it runs again
 async function link(other: Other) {
-  const entry: Link = { key: linkKey(other.file) };
+  const entry: Link = { session: other.info.session };
   links.set(other.user, entry);
-  let peer: Peer;
+  if (!rtc) return;
+  let connection: Awaited<ReturnType<typeof connect>>;
   try {
-    peer = await connect(other.file, user);
+    connection = await connect(rtc, other.user);
   } catch (error) {
     log(`couldn't connect to ${other.user}: ${firstLine(error)}`);
     return;
   }
   // hung up on, or gone offline, while it connected
-  if (links.get(other.user) !== entry || !listener) return peer.dispose();
-  entry.peer = peer;
+  if (links.get(other.user) !== entry || !rtc) return connection.close();
+  entry.peer = connection.peer;
+  entry.close = connection.close;
   log(`connected to ${other.user}`);
-  peer.onClose(() => {
-    if (entry.peer !== peer) return;
+  connection.onClose(() => {
+    if (entry.peer !== connection.peer) return;
     entry.peer = undefined;
     log(`${other.user} hung up`);
     void render();
@@ -410,9 +417,9 @@ async function link(other: Other) {
 function unlink(name: string) {
   const entry = links.get(name);
   links.delete(name);
-  const peer = entry?.peer;
-  if (entry) entry.peer = undefined;
-  peer?.dispose();
+  if (!entry) return;
+  entry.peer = undefined;
+  entry.close?.();
 }
 
 // gh's token for this user - or, if gh is missing or not signed in as them,
@@ -426,18 +433,18 @@ async function signInState(): Promise<{ ghToken: string } | { status: Partial<Tr
   return { ghToken };
 }
 
-// this user's inbox, written to their folder - whether that changed anything
-async function scanOwn(ghToken: string): Promise<{ changed: boolean; status: Partial<TrayParams> }> {
+// this user's inbox, written to their folder - the others told if that
+// changed anything
+async function scanOwn(ghToken: string): Promise<{ status: Partial<TrayParams> }> {
   const scanned = await inbox.scan(ghToken, config.autoMarkDone);
   if (scanned.markedDone > 0) log(`marked ${scanned.markedDone} finished notification(s) done`);
   if (scanned.markDoneError) log(`couldn't mark some notifications done: ${scanned.markDoneError}`);
   if (scanned.searchError) log(`couldn't search for review requests: ${scanned.searchError}`);
   pollSeconds = scanned.pollSeconds;
   mine = scanned.items;
-  const changed = await own.write(mine);
-  if (changed) {
+  if (await own.write(mine)) {
     lastUpdatedAt = new Date().toISOString();
-    await writeOwnUserFile();
+    rtc?.update({ info: { lastUpdatedAt, session } });
   }
 
   // the icon is for what this user can approve; the rest is only told
@@ -445,7 +452,6 @@ async function scanOwn(ghToken: string): Promise<{ changed: boolean; status: Par
   const waiting = mine.length - othersOnly;
   const more = othersOnly > 0 ? `, ${othersOnly} needing someone else` : '';
   return {
-    changed,
     status: waiting > 0
       ? { icon: icons.waiting, tooltip: `${waiting} waiting for ${user}${more}` }
       : { icon: icons.clear, tooltip: `Nothing waiting for ${user}${more}` },
@@ -453,16 +459,14 @@ async function scanOwn(ghToken: string): Promise<{ changed: boolean; status: Par
 }
 
 // looks at everyone's folders and this user's inbox. Asked for by Check Now
-// (here or anywhere), it asks every other tray to as well; otherwise it only
-// does if this user's files changed, so they see it - which settles, since a
-// refresh that finds nothing new changes nothing. Says how long to leave it
-// before the next poll.
+// (here or anywhere), it asks every other tray to as well. Says how long to
+// leave it before the next poll.
 async function refreshOnce(broadcast: boolean): Promise<number> {
   clearTimeout(nextPoll);
   await render({ icon: icons.syncing });
 
-  // until gh is signed in as this user, the tray takes no part: no listener,
-  // no user.json, nobody's folders - only a way to log in
+  // until gh is signed in as this user, the tray takes no part: it isn't
+  // seen, sees nobody - only a way to log in
   const state = await signInState().catch(error => ({
     status: { icon: icons.clear, tooltip: `Couldn't check: ${firstLine(error)}` },
   }));
@@ -472,10 +476,10 @@ async function refreshOnce(broadcast: boolean): Promise<number> {
     return DEFAULT_POLL_SECONDS;
   }
   try {
-    await goOnline();
+    goOnline();
   } catch (error) {
-    log(`couldn't start listening: ${firstLine(error)}`);
-    await render({ icon: icons.clear, tooltip: `Couldn't start listening: ${firstLine(error)}` });
+    log(`couldn't start sharing: ${firstLine(error)}`);
+    await render({ icon: icons.clear, tooltip: `Couldn't start sharing: ${firstLine(error)}` });
     return DEFAULT_POLL_SECONDS;
   }
 
@@ -498,7 +502,9 @@ async function refreshOnce(broadcast: boolean): Promise<number> {
     ...(scanned.status === 'fulfilled' ? scanned.value.status : {}),
     ...(reason ? { tooltip: `Couldn't check: ${reason}` } : {}),
   });
-  if (broadcast || (scanned.status === 'fulfilled' && scanned.value.changed)) broadcastRefresh();
+  // the others hear of this user's files changing through what the tray
+  // advertises; only Check Now has them all look at GitHub again too
+  if (broadcast) broadcastRefresh();
   await github.save().catch(error => log(`couldn't save the cache: ${firstLine(error)}`));
   return pollSeconds;
 }
