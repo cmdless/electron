@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRtcHost, graphApp, graphAppFolderPath, graphAppFolderSignaling, parseProvider, providerLabel, signalingFor } from './index.js';
+import { createRtcHost, graphApp, graphAppFolderPath, graphAppFolderSignaling, parseProvider, providerArgs, providerLabel, signalingFor } from './index.js';
 import type { Device, RtcHost } from './index.js';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
@@ -77,6 +77,18 @@ test('a command line gives the same provider settings everywhere', () => {
   assert.throws(() => parseProvider(['graph-app-folder', 't']), /tenant id and a client id/);
   assert.throws(() => parseProvider(['ftp']), /dropbox, folder or graph-app-folder/);
   assert.equal(signalingFor({ kind: 'folder', path: '/tmp' }, () => { throw new Error('a folder has no token'); }).needsPerson(new Error('x')), false);
+});
+
+test('providerArgs gives back the command line that parses to a provider', () => {
+  for (const args of [
+    ['graph-app-folder', 't', 'c'],
+    ['graph-app-folder', 't', 'c', 'personal', 'http://localhost:1'],
+    ['graph-app-folder', 't', 'c', 'drive', 'x', 'http://localhost:1234'],
+    ['graph-app-folder', 't', 'c', 'site', 's'],
+    ['folder', '/abs/here'],
+    ['dropbox'],
+    ['dropbox', 'key', 'http://localhost/back'],
+  ]) assert.deepEqual(providerArgs(parseProvider(args)), args);
 });
 
 test('hosts signaling through a Graph App folder see each other, and connect', { timeout: 30_000 }, async () => {

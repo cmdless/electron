@@ -17,7 +17,7 @@ import { connect, serve, trayProtocol, userOf } from './peers.js';
 import type { SentItem, Tray, TrayInfo } from './peers.js';
 import { memory, pointer, prefixOps } from '@cmdless/rpc-sdk';
 import type { Operation } from '@cmdless/rpc-sdk';
-import { accountOf, createRtcHost, parseProvider, providerLabel, providerName, providerUsage, signalingFor } from '@cmdless/rtc-sdk/node';
+import { accountOf, createRtcHost, parseProvider, providerArgs, providerLabel, providerName, providerUsage, signalingFor } from '@cmdless/rtc-sdk/node';
 import type { ProviderSettings, RtcHost } from '@cmdless/rtc-sdk/node';
 import { ensureAuth, providerKey } from '@cmdless/auth-sdk/node';
 import type { ProviderStatus } from '@cmdless/auth-sdk/node';
@@ -25,10 +25,12 @@ import { createLog, logFile } from './log.js';
 import { coalesce, firstLine, writeAtomic } from './util.js';
 import { logViewer } from './logViewer.js';
 import { approvalsWindow } from './approvalsWindow.js';
+import { shortcutsWindow } from './shortcutsWindow.js';
+import { platformOf, repoSpec } from '../shared/shortcuts.js';
 import { approvalsProtocol } from '../shared/protocols.js';
 import type { Devices } from '../shared/protocols.js';
 
-const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { name: string };
+const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { name: string; repository?: string | { url?: string } };
 const asset = (name: string) => fileURLToPath(new URL(`../../assets/${name}`, import.meta.url));
 const icons = { clear: asset('checkTemplate.png'), waiting: asset('alertTemplate.png'), syncing: asset('syncTemplate.png') };
 
@@ -304,6 +306,7 @@ function menu(): TrayMenuItem[] {
           { id: 'notifications', label: 'GitHub Notifications...' },
           { id: 'approvals', label: 'Approval UI...' },
           { id: 'log-viewer', label: 'Log Viewer...' },
+          { id: 'shortcuts', label: 'Show Shortcuts...' },
           { type: 'separator' },
           { type: 'checkbox', id: 'auto-mark-done', label: 'Automatically Mark as Done', checked: config.autoMarkDone },
           // the provider's account, while it's signed in
@@ -707,6 +710,21 @@ function single(what: string, open: () => Promise<RemoteWindow>) {
 const showLog = single('the log', () => host.open(logViewer, { file: logFile(host.params.userData), title: `${appName} log` }));
 // everyone's items
 const showApprovals = single('approvals', () => host.open(approvalsWindow, { store: devices, title: appName }));
+// scripts that start the tray as this one was started - its provider set,
+// then its account and owners - from npm or the repo, the repo's root build
+// script building it
+const showShortcuts = single('shortcuts', () => host.open(shortcutsWindow, {
+  title: `${appName} shortcuts`,
+  settings: {
+    app: appName,
+    packageName: pkg.name,
+    repo: repoSpec(pkg.repository) ?? pkg.name,
+    build: 'build',
+    platform: platformOf(process.platform),
+    set: ['set', 'provider', ...config.provider ? providerArgs(config.provider) : ['none']],
+    run: ['--user', user, ...(args.org ?? []).flatMap(org => ['--org', org])],
+  },
+}));
 
 tray.onEvent(event => {
   if (event.event !== 'menu-item') return;
@@ -724,6 +742,7 @@ tray.onEvent(event => {
   if (item === 'auto-mark-done') return void toggleAutoMarkDone();
   if (item === 'log-viewer') return void showLog();
   if (item === 'approvals') return void showApprovals();
+  if (item === 'shortcuts') return void showShortcuts();
   if (item === 'provider-login') return void providerLogin();
   if (item === 'provider-logout') return void operation(providerLogout);
   if (!item.startsWith('{')) return;

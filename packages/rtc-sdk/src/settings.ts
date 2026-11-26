@@ -144,6 +144,25 @@ export function parseProvider([kind, ...rest]: string[], resolve: (path: string)
   }
 }
 
+// the command line that gives a provider, after 'provider' - parseProvider's
+// arguments back
+export function providerArgs(provider: ProviderSettings): string[] {
+  switch (provider.kind) {
+    case 'dropbox':
+      return [provider.kind, ...provider.appKey !== undefined ? [provider.appKey] : [], ...provider.redirectUri !== undefined ? [provider.redirectUri] : []];
+    case 'folder':
+      return [provider.kind, provider.path];
+    case 'graph-app-folder': {
+      const { folder, redirectUri } = provider;
+      const where = folder.type === 'drive' ? ['drive', folder.driveId]
+        : folder.type === 'site' ? ['site', folder.siteId]
+          // personal is the default, said only when a redirect URI follows
+          : redirectUri !== undefined ? ['personal'] : [];
+      return [provider.kind, provider.tenantId, provider.clientId, ...where, ...redirectUri !== undefined ? [redirectUri] : []];
+    }
+  }
+}
+
 // a token for a provider's account: from whatever holds its sign-in, asked
 // again with retry when the provider refused the last one
 export type GetToken = (retry: boolean) => Promise<string>;
