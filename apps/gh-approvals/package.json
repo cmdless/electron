@@ -28,6 +28,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@cmdless/auth": "*",
+    "@cmdless/auth-sdk": "*",
     "@cmdless/rpc-sdk": "*",
     "@cmdless/rtc-sdk": "*",
     "@cmdless/ui-sdk": "*",
