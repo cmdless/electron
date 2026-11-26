@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 // what an error says, on one line - gh and GitHub can say a lot
 export const firstLine = (error: unknown) => (error instanceof Error ? error.message : String(error)).split('\n')[0];
 
@@ -26,4 +29,16 @@ export function coalesce<A>(work: (arg: A) => Promise<void>, merge: (queued: A, 
       }
     })();
   };
+}
+
+// each write's own temporary name, so two writes of one file never share one
+let writes = 0;
+
+// a file written whole, under a name of its own and then renamed into place,
+// so nobody ever reads half of one
+export async function writeAtomic(file: string, text: string) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${++writes}.tmp`;
+  await fs.writeFile(temporary, text);
+  await fs.rename(temporary, file);
 }

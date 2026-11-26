@@ -35,7 +35,7 @@ export function useChannel<T>(channel: StateSubscription<T> | undefined) {
     if (!channel) return;
     let stopped = false;
     let stop: (() => void) | undefined;
-    void channel.subscribe(setState).then(unsubscribe => {
+    void channel.subscribe(state => setState(state)).then(unsubscribe => {
       if (stopped) unsubscribe();
       else stop = unsubscribe;
     });
