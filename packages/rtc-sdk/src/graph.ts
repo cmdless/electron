@@ -1,5 +1,6 @@
-// a small Microsoft Graph client for OneDrive and SharePoint files - just
-// what signaling needs, on fetch, so node and a browser page use the same one
+// a small Microsoft Graph client for the App folder on a OneDrive or
+// SharePoint drive - just what signaling needs, on fetch, so node and a
+// browser page use the same one
 
 import { fileSignaling } from './providers.js';
 import type { FileChange, SignalFiles, SignalingProvider } from './providers.js';
@@ -7,30 +8,38 @@ import type { FileChange, SignalFiles, SignalingProvider } from './providers.js'
 // where a sign-in is sent back to: a Mobile and desktop redirect, which
 // Microsoft lets any localhost URL be. Nothing has to answer there - the
 // sign-in window catches the redirect before it's requested.
-export const ONEDRIVE_REDIRECT_URI = 'http://localhost';
-
-// the signed-in user's own OneDrive
-export const ONEDRIVE_ME = '/me/drive';
+export const GRAPH_REDIRECT_URI = 'http://localhost';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
-// Signaling goes in this app's App folder on a drive, given as a Graph path:
-// the signed-in user's own (/me/drive, the default) - so only their devices
-// see each other - or one everyone with access shares: a library by its id
-// (/drives/{driveId}) or a SharePoint site's default one
-// (/sites/{siteId}/drive). The App folder in it is where everything goes.
-export function oneDriveFolder(drive = ONEDRIVE_ME) {
-  const trimmed = drive.trim().replace(/\/+$/, '').replace(/\/special\/approot$/, '');
-  if (!/^\/(me\/drive|drives\/[^/]+|sites\/[^/]+\/drive)$/.test(trimmed))
-    throw new Error(`a OneDrive drive is ${ONEDRIVE_ME}, /drives/{driveId} or /sites/{siteId}/drive - not ${drive}`);
-  return `${trimmed}/special/approot`;
+// Which drive's App folder: the signed-in user's own OneDrive - so only
+// their devices see each other - or one everyone with access to it shares:
+// a document library by its drive id, or a SharePoint site's default one
+export type GraphAppFolder =
+  | { type: 'personal' }
+  | { type: 'drive'; driveId: string }
+  | { type: 'site'; siteId: string };
+
+// the App folder, as a Graph path
+export function graphAppFolderPath(folder: GraphAppFolder) {
+  const id = (value: string, what: string) => {
+    // used as it is, as Graph's own ids are (a site's has commas in it)
+    if (typeof value !== 'string' || !/^[\w.,!~-]+$/.test(value.trim())) throw new Error(`${value} isn't a ${what}`);
+    return value.trim();
+  };
+  switch (folder?.type) {
+    case 'personal': return '/me/drive/special/approot';
+    case 'drive': return `/drives/${id(folder.driveId, 'drive id')}/special/approot`;
+    case 'site': return `/sites/${id(folder.siteId, 'site id')}/drive/special/approot`;
+    default: throw new Error('an App folder is personal, a drive\'s or a site\'s');
+  }
 }
 
 // the Entra app to sign in to: its tenant (an id, a domain, or 'common' /
 // 'organizations' / 'consumers') and client id. It only ever asks for App
 // folders, whichever drive they're on.
-export const oneDriveApp = (tenantId: string, clientId: string, redirectUri = ONEDRIVE_REDIRECT_URI) => ({
-  id: 'onedrive',
+export const graphApp = (tenantId: string, clientId: string, redirectUri = GRAPH_REDIRECT_URI) => ({
+  id: 'graph-app-folder',
   authorizeUrl: `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/authorize`,
   tokenUrl: `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
   clientId,
@@ -52,8 +61,8 @@ const escapePath = (path: string) => path.split('/').filter(Boolean).map(encodeU
 // getToken is asked for a token before every call, and again (with
 // retry: true) when Graph refuses one - so whoever holds the token can
 // refresh it
-export function createOneDrive(getToken: (retry: boolean) => Promise<string>, drive?: string) {
-  const root = oneDriveFolder(drive);
+export function createGraphAppFolder(getToken: (retry: boolean) => Promise<string>, folder: GraphAppFolder) {
+  const root = graphAppFolderPath(folder);
   // an item in the App folder, by its path there
   const item = (path: string) => `${GRAPH}${root}:/${escapePath(path)}:`;
 
@@ -120,7 +129,7 @@ export function createOneDrive(getToken: (retry: boolean) => Promise<string>, dr
   };
 }
 
-export type OneDrive = ReturnType<typeof createOneDrive>;
+export type GraphAppFolderClient = ReturnType<typeof createGraphAppFolder>;
 
 // how often a watched folder is listed - Graph has no long poll, and a
 // webhook would need somewhere public to call
@@ -128,13 +137,13 @@ const POLL_MS = 3_000;
 // how long a watch that failed waits before it tries again
 const RETRY_MS = 10_000;
 
-// a OneDrive folder as files: a folder is watched by listing it every few
+// an App folder as files: a folder is watched by listing it every few
 // seconds, a file changed when its eTag has
-export function oneDriveFiles(oneDrive: OneDrive): SignalFiles {
+export function graphFiles(client: GraphAppFolderClient): SignalFiles {
   return {
-    write: (path, text) => oneDrive.upload(path, text),
-    read: path => oneDrive.download(path),
-    remove: path => oneDrive.remove(path),
+    write: (path, text) => client.upload(path, text),
+    read: path => client.download(path),
+    remove: path => client.remove(path),
     watch(folder, onChanges, onError) {
       let running = true;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -147,7 +156,7 @@ export function oneDriveFiles(oneDrive: OneDrive): SignalFiles {
         let known: Map<string, string> | undefined;
         while (running) {
           try {
-            const listed = await oneDrive.list(folder);
+            const listed = await client.list(folder);
             if (!running) return;
             const changes: FileChange[] = [];
             for (const [name, eTag] of listed) if (known?.get(name) !== eTag) changes.push({ name, removed: false });
@@ -176,11 +185,11 @@ export function oneDriveFiles(oneDrive: OneDrive): SignalFiles {
   };
 }
 
-// signaling through the App folder on a drive (see oneDriveFolder). getToken
-// is the Graph client's (see createOneDrive); a refused or missing token
-// needs a sign-in - and so does anything else signedOut says does.
-export function oneDriveSignaling(getToken: (retry: boolean) => Promise<string>, drive?: string, signedOut?: (error: unknown) => boolean): SignalingProvider {
-  return fileSignaling(oneDriveFiles(createOneDrive(getToken, drive)), error =>
+// signaling through a drive's App folder. getToken is the Graph client's
+// (see createGraphAppFolder); a refused or missing token needs a sign-in -
+// and so does anything else signedOut says does.
+export function graphAppFolderSignaling(getToken: (retry: boolean) => Promise<string>, folder: GraphAppFolder, signedOut?: (error: unknown) => boolean): SignalingProvider {
+  return fileSignaling(graphFiles(createGraphAppFolder(getToken, folder)), error =>
     (error instanceof GraphError && error.status === 401)
     || String((error as Error)?.message ?? error).includes('not signed in')
     || !!signedOut?.(error));

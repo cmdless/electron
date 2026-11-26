@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRtcHost, oneDriveApp, oneDriveFolder, oneDriveSignaling, parseProvider, signalingFor } from './index.js';
+import { createRtcHost, graphApp, graphAppFolderPath, graphAppFolderSignaling, parseProvider, providerLabel, signalingFor } from './index.js';
 import type { Device, RtcHost } from './index.js';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
@@ -50,29 +50,33 @@ function fakeGraph(root: string) {
   return { fetch, files, calls, refuseNoMore: () => { refuse = ''; } };
 }
 
-test('OneDrive signals in the App folder of whichever drive it\'s given', () => {
-  assert.equal(oneDriveFolder(), '/me/drive/special/approot');
-  assert.equal(oneDriveFolder('/drives/b!abc'), '/drives/b!abc/special/approot');
-  assert.equal(oneDriveFolder('/sites/contoso.sharepoint.com,1,2/drive/'), '/sites/contoso.sharepoint.com,1,2/drive/special/approot');
-  assert.equal(oneDriveFolder('/drives/b!abc/special/approot'), '/drives/b!abc/special/approot');
-  assert.throws(() => oneDriveFolder('drives/x'));
-  assert.throws(() => oneDriveFolder('/drives/x/root:/y'));
-  assert.deepEqual(oneDriveApp('tenant', 'client').scopes, ['Files.ReadWrite.AppFolder', 'offline_access']);
-  assert.equal(oneDriveApp('tenant', 'client').tokenUrl, 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token');
+test('a Graph App folder is personal, a drive\'s or a site\'s', () => {
+  assert.equal(graphAppFolderPath({ type: 'personal' }), '/me/drive/special/approot');
+  assert.equal(graphAppFolderPath({ type: 'drive', driveId: 'b!abc' }), '/drives/b!abc/special/approot');
+  assert.equal(graphAppFolderPath({ type: 'site', siteId: 'contoso.sharepoint.com,1,2' }), '/sites/contoso.sharepoint.com,1,2/drive/special/approot');
+  assert.throws(() => graphAppFolderPath({ type: 'drive', driveId: '' }));
+  assert.throws(() => graphAppFolderPath({ type: 'site', siteId: 'a/b' }));
+  assert.deepEqual(graphApp('tenant', 'client').scopes, ['Files.ReadWrite.AppFolder', 'offline_access']);
+  assert.equal(graphApp('tenant', 'client').tokenUrl, 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token');
 });
 
 test('a command line gives the same provider settings everywhere', () => {
-  assert.deepEqual(parseProvider(['onedrive', 't', 'c']), { kind: 'onedrive', tenantId: 't', clientId: 'c' });
-  assert.deepEqual(parseProvider(['onedrive', 't', 'c', '/drives/x', 'http://localhost:1234']),
-    { kind: 'onedrive', tenantId: 't', clientId: 'c', drive: '/drives/x', redirectUri: 'http://localhost:1234' });
+  const graph = { kind: 'graph-app-folder', tenantId: 't', clientId: 'c' };
+  assert.deepEqual(parseProvider(['graph-app-folder', 't', 'c']), { ...graph, folder: { type: 'personal' } });
+  assert.deepEqual(parseProvider(['graph-app-folder', 't', 'c', 'drive', 'x', 'http://localhost:1234']),
+    { ...graph, folder: { type: 'drive', driveId: 'x' }, redirectUri: 'http://localhost:1234' });
+  assert.deepEqual(parseProvider(['graph-app-folder', 't', 'c', 'site', 's']), { ...graph, folder: { type: 'site', siteId: 's' } });
+  assert.deepEqual(parseProvider(['graph-app-folder', 't', 'c', 'http://localhost:1']), { ...graph, folder: { type: 'personal' }, redirectUri: 'http://localhost:1' });
+  assert.throws(() => parseProvider(['graph-app-folder', 't', 'c', 'drive']), /drive's id/);
+  assert.equal(providerLabel(parseProvider(['graph-app-folder', 't', 'c', 'site', 's'])), 'SharePoint (site s)');
   assert.deepEqual(parseProvider(['folder', 'here'], path => `/abs/${path}`), { kind: 'folder', path: '/abs/here' });
   assert.deepEqual(parseProvider(['dropbox']), { kind: 'dropbox' });
-  assert.throws(() => parseProvider(['onedrive', 't']), /tenant id and a client id/);
-  assert.throws(() => parseProvider(['ftp']), /dropbox, folder or onedrive/);
+  assert.throws(() => parseProvider(['graph-app-folder', 't']), /tenant id and a client id/);
+  assert.throws(() => parseProvider(['ftp']), /dropbox, folder or graph-app-folder/);
   assert.equal(signalingFor({ kind: 'folder', path: '/tmp' }, () => { throw new Error('a folder has no token'); }).needsPerson(new Error('x')), false);
 });
 
-test('hosts signaling through a OneDrive folder see each other, and connect', { timeout: 30_000 }, async () => {
+test('hosts signaling through a Graph App folder see each other, and connect', { timeout: 30_000 }, async () => {
   const root = '/drives/b!team/special/approot';
   const graph = fakeGraph(root);
   const realFetch = globalThis.fetch;
@@ -87,7 +91,7 @@ test('hosts signaling through a OneDrive folder see each other, and connect', { 
       if (retry) graph.refuseNoMore();
       return retry ? 'fresh-token' : 'stale-token';
     };
-    const signaling = () => oneDriveSignaling(getToken, '/drives/b!team');
+    const signaling = () => graphAppFolderSignaling(getToken, { type: 'drive', driveId: 'b!team' });
     const a = createRtcHost(signaling(), {
       deviceId: 'a', name: 'A', iceServers: [],
       accept: channel => void channel.pipe.onMessage(text => channel.pipe.send(`a heard ${text}`)),

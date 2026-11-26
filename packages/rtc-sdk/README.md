@@ -36,7 +36,7 @@ const client = myProtocol.createClient((await link.open('my-protocol')).connecti
 - `memorySignaling()` — within one process: hosts that share one see each other, nothing else does. For tests, and hosts side by side.
 - `folderSignaling(path)` (`/node`) — a folder every device can write to, such as one a sync client keeps in step across machines. No account: whoever can write the folder is in the group. Changes are noticed by the OS's file events, so a network share that sends none won't do.
 - `dropboxSignaling(getToken)` — a Dropbox app's own App folder: devices signed in to the same Dropbox account through the same app. `dropboxApp(appKey?, redirectUri?)` is the OAuth app to sign in with — cmdless's own, or yours with one of its registered redirect URIs.
-- `oneDriveSignaling(getToken, drive?)` — the app's App folder on a OneDrive or SharePoint drive, through Microsoft Graph. The drive is a Graph path: `/me/drive` (the default) is the signed-in user's own, so only their devices see each other; `/drives/{driveId}` (a document library) or `/sites/{siteId}/drive` (a site's default library) is one everyone with access shares. `oneDriveApp(tenantId, clientId, redirectUri?)` is the Entra app to sign in with: a public client with the Mobile and desktop platform (redirect `http://localhost` unless you give another), asking only for `Files.ReadWrite.AppFolder`, whichever drive. Graph has no long poll, so each watched folder is listed every three seconds, and a connection takes a few seconds to set up.
+- `graphAppFolderSignaling(getToken, folder)` — the app's App folder on a OneDrive or SharePoint drive, through Microsoft Graph. `folder` is a `GraphAppFolder`: `{ type: 'personal' }` is the signed-in user's own OneDrive's, so only their devices see each other; `{ type: 'drive', driveId }` (a document library's) or `{ type: 'site', siteId }` (a SharePoint site's default library's) is one everyone with access shares. `graphApp(tenantId, clientId, redirectUri?)` is the Entra app to sign in with: a public client with the Mobile and desktop platform (redirect `http://localhost` unless you give another), asking only for `Files.ReadWrite.AppFolder`, whichever drive. Graph has no long poll, so each watched folder is listed every three seconds, and a connection takes a few seconds to set up.
 
 `getToken(retry)` is asked before every call, and again with `retry` when the provider refuses a token, so whatever holds the sign-in can refresh it; rtc-sdk never signs in itself. [`@cmdless/auth`](../../apps/auth)'s broker does, for the daemons.
 
@@ -50,11 +50,11 @@ What an app keeps in its config to say which provider it uses — the same in ev
 type ProviderSettings =
   | { kind: 'dropbox'; appKey?: string; redirectUri?: string }
   | { kind: 'folder'; path: string }
-  | { kind: 'onedrive'; tenantId: string; clientId: string; drive?: string; redirectUri?: string };
+  | { kind: 'graph-app-folder'; tenantId: string; clientId: string; folder: GraphAppFolder; redirectUri?: string };
 ```
 
-- `parseProvider(args, resolve?)` reads one from a command line (`onedrive <tenant id> <client id> [<drive> [<redirect URI>]]`, and so on), and `providerUsage(command)` is the usage text for it.
-- `validProvider`, `providerName` (`OneDrive`) and `providerLabel` (`OneDrive (/drives/{driveId})`).
+- `parseProvider(args, resolve?)` reads one from a command line (`graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]`, and so on), and `providerUsage(command)` is the usage text for it.
+- `validProvider`, `providerName` (`OneDrive`, `SharePoint`) and `providerLabel` (`SharePoint (site {siteId})`); each kind's own type is `DropboxProvider`, `FolderProvider` and `GraphAppFolderProvider`.
 - `accountOf(settings)` is the OAuth app its account is signed in to — none for a folder.
 - `signalingFor(settings, getToken)` (`/node`) is the provider itself; `accountSignaling` is the same without folders, for the browser.
 

@@ -3,21 +3,30 @@
 // runtime - the same everywhere, so every app configures it alike.
 
 import { dropboxApp, dropboxSignaling } from './dropbox.js';
-import { ONEDRIVE_ME, oneDriveApp, oneDriveFolder, oneDriveSignaling } from './onedrive.js';
+import { graphApp, graphAppFolderPath, graphAppFolderSignaling } from './graph.js';
+import type { GraphAppFolder } from './graph.js';
 import type { SignalingProvider } from './providers.js';
 
-export type ProviderSettings =
-  // a Dropbox app's App folder: cmdless's own app, or yours by its key and a
-  // redirect URI registered for it
-  | { kind: 'dropbox'; appKey?: string; redirectUri?: string }
-  // a folder every device can write to, such as one a sync client keeps in
-  // step - node only
-  | { kind: 'folder'; path: string }
-  // the App folder on a OneDrive or SharePoint drive, through an Entra app:
-  // its tenant and client id, the drive as a Graph path (the user's own if
-  // it's left out), and a redirect URI registered for the app
-  // (http://localhost if it's left out)
-  | { kind: 'onedrive'; tenantId: string; clientId: string; drive?: string; redirectUri?: string };
+// a Dropbox app's App folder: cmdless's own app, or yours by its key and a
+// redirect URI registered for it
+export type DropboxProvider = { kind: 'dropbox'; appKey?: string; redirectUri?: string };
+
+// a folder every device can write to, such as one a sync client keeps in
+// step - node only
+export type FolderProvider = { kind: 'folder'; path: string };
+
+// the App folder on a OneDrive or SharePoint drive, through Microsoft Graph
+// and an Entra app: its tenant and client id, which drive's App folder, and
+// a redirect URI registered for the app (http://localhost if it's left out)
+export type GraphAppFolderProvider = {
+  kind: 'graph-app-folder';
+  tenantId: string;
+  clientId: string;
+  folder: GraphAppFolder;
+  redirectUri?: string;
+};
+
+export type ProviderSettings = DropboxProvider | FolderProvider | GraphAppFolderProvider;
 
 export type ProviderKind = ProviderSettings['kind'];
 
@@ -26,7 +35,7 @@ export type ProviderKind = ProviderSettings['kind'];
 export function accountOf(provider: ProviderSettings) {
   switch (provider.kind) {
     case 'dropbox': return dropboxApp(provider.appKey, provider.redirectUri);
-    case 'onedrive': return oneDriveApp(provider.tenantId, provider.clientId, provider.redirectUri);
+    case 'graph-app-folder': return graphApp(provider.tenantId, provider.clientId, provider.redirectUri);
     case 'folder': return undefined;
   }
 }
@@ -35,7 +44,7 @@ export function accountOf(provider: ProviderSettings) {
 export function providerName(provider: ProviderSettings) {
   switch (provider.kind) {
     case 'dropbox': return 'Dropbox';
-    case 'onedrive': return 'OneDrive';
+    case 'graph-app-folder': return provider.folder.type === 'site' ? 'SharePoint' : 'OneDrive';
     case 'folder': return 'a folder';
   }
 }
@@ -44,7 +53,12 @@ export function providerName(provider: ProviderSettings) {
 export function providerLabel(provider: ProviderSettings) {
   switch (provider.kind) {
     case 'dropbox': return provider.appKey ? `Dropbox (app ${provider.appKey})` : 'Dropbox';
-    case 'onedrive': return !provider.drive || provider.drive === ONEDRIVE_ME ? 'OneDrive' : `OneDrive (${provider.drive})`;
+    case 'graph-app-folder': {
+      const { folder } = provider;
+      return folder.type === 'personal' ? 'OneDrive'
+        : folder.type === 'drive' ? `OneDrive (drive ${folder.driveId})`
+          : `SharePoint (site ${folder.siteId})`;
+    }
     case 'folder': return provider.path;
   }
 }
@@ -68,14 +82,14 @@ export function validProvider(provider: ProviderSettings): ProviderSettings {
     case 'folder':
       if (typeof provider.path !== 'string' || !absolute(provider.path)) throw new Error('a folder provider needs a full path');
       return provider;
-    case 'onedrive':
+    case 'graph-app-folder':
       nonEmpty(provider.tenantId, 'a tenant id');
       nonEmpty(provider.clientId, 'a client id');
-      oneDriveFolder(provider.drive);
+      graphAppFolderPath(provider.folder);
       url(provider.redirectUri);
       return provider;
     default:
-      throw new Error('the provider is dropbox, folder or onedrive');
+      throw new Error('the provider is dropbox, folder or graph-app-folder');
   }
 }
 
@@ -89,31 +103,41 @@ const PROVIDER_USAGE = `provider dropbox [<app key> [<redirect URI>]]
     its registered redirect URIs (http://localhost/cmdless-auth if left out)
 provider folder <path>
     a folder every device can write to, such as one a sync client keeps
-provider onedrive <tenant id> <client id> [<drive> [<redirect URI>]]
-    the App folder on a OneDrive drive, through an Entra app (Mobile and
-    desktop, redirect http://localhost if left out). The drive is a Graph
-    path: /me/drive (the default) for one user's devices, or one everyone
-    shares - /drives/{driveId} or /sites/{siteId}/drive`;
+provider graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]
+    the App folder on a OneDrive or SharePoint drive, through an Entra app
+    (Mobile and desktop, redirect http://localhost if left out): your own
+    OneDrive's (personal, the default) for your own devices, or one everyone
+    shares - a document library's by its drive id, or a SharePoint site's
+    default library's`;
 
 // the provider a command line gives, after 'provider': its kind and its
 // arguments - a folder's path made absolute by resolve
 export function parseProvider([kind, ...rest]: string[], resolve: (path: string) => string = path => path): ProviderSettings {
-  const [first, second, third, fourth] = rest;
   switch (kind) {
-    case 'dropbox':
-      return validProvider({ kind, ...first !== undefined && { appKey: first }, ...second !== undefined && { redirectUri: second } });
+    case 'dropbox': {
+      const [appKey, redirectUri] = rest;
+      return validProvider({ kind, ...appKey !== undefined && { appKey }, ...redirectUri !== undefined && { redirectUri } });
+    }
     case 'folder':
-      if (first === undefined) throw new Error('provider folder takes the folder');
-      return validProvider({ kind, path: resolve(first) });
-    case 'onedrive':
-      if (first === undefined || second === undefined) throw new Error('provider onedrive takes a tenant id and a client id');
-      return validProvider({
-        kind, tenantId: first, clientId: second,
-        ...third !== undefined && { drive: third },
-        ...fourth !== undefined && { redirectUri: fourth },
-      });
+      if (rest[0] === undefined) throw new Error('provider folder takes the folder');
+      return validProvider({ kind, path: resolve(rest[0]) });
+    case 'graph-app-folder': {
+      const [tenantId, clientId, type, ...more] = rest;
+      if (tenantId === undefined || clientId === undefined) throw new Error('provider graph-app-folder takes a tenant id and a client id');
+      let folder: GraphAppFolder = { type: 'personal' };
+      let after = type === undefined || type === 'personal' ? more : [type, ...more];
+      if (type === 'drive' || type === 'site') {
+        const [id, ...left] = more;
+        if (id === undefined) throw new Error(`a ${type}'s App folder takes the ${type}'s id`);
+        folder = type === 'drive' ? { type, driveId: id } : { type, siteId: id };
+        after = left;
+      }
+      const [redirectUri, extra] = after;
+      if (extra !== undefined) throw new Error(`provider graph-app-folder doesn't take ${extra}`);
+      return validProvider({ kind, tenantId, clientId, folder, ...redirectUri !== undefined && { redirectUri } });
+    }
     default:
-      throw new Error('the provider is dropbox, folder or onedrive');
+      throw new Error('the provider is dropbox, folder or graph-app-folder');
   }
 }
 
@@ -126,7 +150,7 @@ export type GetToken = (retry: boolean) => Promise<string>;
 export function accountSignaling(provider: ProviderSettings, getToken: GetToken, signedOut?: (error: unknown) => boolean): SignalingProvider {
   switch (provider.kind) {
     case 'dropbox': return dropboxSignaling(getToken, signedOut);
-    case 'onedrive': return oneDriveSignaling(getToken, provider.drive, signedOut);
+    case 'graph-app-folder': return graphAppFolderSignaling(getToken, provider.folder, signedOut);
     case 'folder': throw new Error('a folder provider is node\'s - use signalingFor from @cmdless/rtc-sdk/node');
   }
 }
