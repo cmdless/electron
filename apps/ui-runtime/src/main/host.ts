@@ -3,13 +3,14 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { app, shell } from 'electron';
+import { app, Menu, shell } from 'electron';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import {
   isEphemeralCmdlessApp, listenOnce, rejectService, resolveCmdlessApp, resolveService, sendTo,
 } from '@cmdless/ui-sdk/node';
 import type { HostService } from '@cmdless/ui-sdk/node';
 import { DialogHandle, Host } from './hosting.js';
+import { appMenu } from './menu.js';
 import { appId, startMenuShortcut, writeDesktopFile } from './platform.js';
 
 // what a process that lost the lock hands the lock holder: where to send
@@ -130,6 +131,10 @@ async function main() {
   });
 
   await ready;
+  // Quit closes every window and dialog - and quits, as it always would,
+  // unless a tray is up: the app goes on for that, as it does with no
+  // windows open. Quitting from the Dock, or logging out, still quits.
+  Menu.setApplicationMenu(appMenu(() => host.hasTray ? host.closeShown() : quit()));
   // the owner is told where to connect - and if it never does, nothing
   // would ever end this process, so it ends itself
   await resolveService(host.service);
