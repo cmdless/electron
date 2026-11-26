@@ -53,7 +53,7 @@ type ProviderSettings =
   | { kind: 'graph-app-folder'; tenantId: string; clientId: string; folder: GraphAppFolder; redirectUri?: string };
 ```
 
-- `parseProvider(args, resolve?)` reads one from a command line (`graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]`, and so on), and `providerUsage(command)` is the usage text for it.
+- `parseProvider(args, resolve?)` reads one from a command line (`graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]`, and so on), and `providerUsage(command)` is the usage text for it. `providerArgs(settings)` is the other way: the arguments that give those settings.
 - `validProvider`, `providerName` (`OneDrive`, `SharePoint`) and `providerLabel` (`SharePoint (site {siteId})`); each kind's own type is `DropboxProvider`, `FolderProvider` and `GraphAppFolderProvider`.
 - `accountOf(settings)` is the OAuth app its account is signed in to — none for a folder.
 - `signalingFor(settings, getToken)` (`/node`) is the provider itself; `accountSignaling` is the same without folders, for the browser.
