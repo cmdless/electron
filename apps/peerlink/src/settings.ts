@@ -2,8 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getAppDataPath } from '@cmdless/core/node';
 import type { ProviderSettings, SettingsState, SettingsUpdate } from '@cmdless/peerlink-sdk';
-
-export const DEFAULT_HEARTBEAT_SECONDS = 60;
+import { DEFAULT_HEARTBEAT_SECONDS, DEFAULT_ICE_SERVERS } from '@cmdless/rtc-sdk';
 
 // settings.json: the daemon's while it runs (it reads it once and writes it
 // whole on every change), anyone's while it doesn't
@@ -12,7 +11,7 @@ export const settingsPath = () => path.join(getAppDataPath('peerlink'), 'setting
 export const defaultSettings = (): SettingsState => ({
   deviceId: crypto.randomUUID(),
   deviceName: os.hostname(),
-  iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+  iceServers: DEFAULT_ICE_SERVERS,
   heartbeatSeconds: DEFAULT_HEARTBEAT_SECONDS,
   tray: true,
   provider: { kind: 'dropbox' },
