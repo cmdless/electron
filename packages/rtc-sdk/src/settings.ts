@@ -3,7 +3,7 @@
 // runtime - the same everywhere, so every app configures it alike.
 
 import { dropboxApp, dropboxSignaling } from './dropbox.js';
-import { oneDriveApp, oneDriveBase, oneDriveSignaling } from './onedrive.js';
+import { ONEDRIVE_ME, oneDriveApp, oneDriveFolder, oneDriveSignaling } from './onedrive.js';
 import type { SignalingProvider } from './providers.js';
 
 export type ProviderSettings =
@@ -13,10 +13,11 @@ export type ProviderSettings =
   // a folder every device can write to, such as one a sync client keeps in
   // step - node only
   | { kind: 'folder'; path: string }
-  // a OneDrive or SharePoint folder, through an Entra app: its tenant and
-  // client id, the folder as a Graph path (the App folder if it's left out),
-  // and a redirect URI registered for it (http://localhost if it's left out)
-  | { kind: 'onedrive'; tenantId: string; clientId: string; base?: string; redirectUri?: string };
+  // the App folder on a OneDrive or SharePoint drive, through an Entra app:
+  // its tenant and client id, the drive as a Graph path (the user's own if
+  // it's left out), and a redirect URI registered for the app
+  // (http://localhost if it's left out)
+  | { kind: 'onedrive'; tenantId: string; clientId: string; drive?: string; redirectUri?: string };
 
 export type ProviderKind = ProviderSettings['kind'];
 
@@ -25,7 +26,7 @@ export type ProviderKind = ProviderSettings['kind'];
 export function accountOf(provider: ProviderSettings) {
   switch (provider.kind) {
     case 'dropbox': return dropboxApp(provider.appKey, provider.redirectUri);
-    case 'onedrive': return oneDriveApp(provider.tenantId, provider.clientId, provider.base, provider.redirectUri);
+    case 'onedrive': return oneDriveApp(provider.tenantId, provider.clientId, provider.redirectUri);
     case 'folder': return undefined;
   }
 }
@@ -43,7 +44,7 @@ export function providerName(provider: ProviderSettings) {
 export function providerLabel(provider: ProviderSettings) {
   switch (provider.kind) {
     case 'dropbox': return provider.appKey ? `Dropbox (app ${provider.appKey})` : 'Dropbox';
-    case 'onedrive': return oneDriveBase(provider.base).appFolder ? 'OneDrive (App folder)' : `OneDrive (${provider.base})`;
+    case 'onedrive': return !provider.drive || provider.drive === ONEDRIVE_ME ? 'OneDrive' : `OneDrive (${provider.drive})`;
     case 'folder': return provider.path;
   }
 }
@@ -70,7 +71,7 @@ export function validProvider(provider: ProviderSettings): ProviderSettings {
     case 'onedrive':
       nonEmpty(provider.tenantId, 'a tenant id');
       nonEmpty(provider.clientId, 'a client id');
-      oneDriveBase(provider.base);
+      oneDriveFolder(provider.drive);
       url(provider.redirectUri);
       return provider;
     default:
@@ -88,12 +89,11 @@ const PROVIDER_USAGE = `provider dropbox [<app key> [<redirect URI>]]
     its registered redirect URIs (http://localhost/cmdless-auth if left out)
 provider folder <path>
     a folder every device can write to, such as one a sync client keeps
-provider onedrive <tenant id> <client id> [<base> [<redirect URI>]]
-    a OneDrive folder through an Entra app (Mobile and desktop, redirect
-    http://localhost if left out). The base is a Graph path: the App folder
-    (/me/drive/special/approot, the default) for one user's devices, or a
-    folder everyone shares - /sites/{siteId}/drive/root:/{folder} or
-    /drives/{driveId}/root:/{folder}`;
+provider onedrive <tenant id> <client id> [<drive> [<redirect URI>]]
+    the App folder on a OneDrive drive, through an Entra app (Mobile and
+    desktop, redirect http://localhost if left out). The drive is a Graph
+    path: /me/drive (the default) for one user's devices, or one everyone
+    shares - /drives/{driveId} or /sites/{siteId}/drive`;
 
 // the provider a command line gives, after 'provider': its kind and its
 // arguments - a folder's path made absolute by resolve
@@ -109,7 +109,7 @@ export function parseProvider([kind, ...rest]: string[], resolve: (path: string)
       if (first === undefined || second === undefined) throw new Error('provider onedrive takes a tenant id and a client id');
       return validProvider({
         kind, tenantId: first, clientId: second,
-        ...third !== undefined && { base: third },
+        ...third !== undefined && { drive: third },
         ...fourth !== undefined && { redirectUri: fourth },
       });
     default:
@@ -126,7 +126,7 @@ export type GetToken = (retry: boolean) => Promise<string>;
 export function accountSignaling(provider: ProviderSettings, getToken: GetToken, signedOut?: (error: unknown) => boolean): SignalingProvider {
   switch (provider.kind) {
     case 'dropbox': return dropboxSignaling(getToken, signedOut);
-    case 'onedrive': return oneDriveSignaling(getToken, provider.base, signedOut);
+    case 'onedrive': return oneDriveSignaling(getToken, provider.drive, signedOut);
     case 'folder': throw new Error('a folder provider is node\'s - use signalingFor from @cmdless/rtc-sdk/node');
   }
 }

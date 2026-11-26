@@ -9,9 +9,9 @@ gh-approvals set provider <provider>...
 
 - `--user` — the GitHub account it runs for. [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
 - `--org` — only what's in this owner's repositories. Repeat it for more.
-- `set provider` — what the trays find each other through, kept in `config.json` for every run after: `folder <path>`, `onedrive <tenant id> <client id> [<base> [<redirect URI>]]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items. It's refused while the tray runs. To set it and start: `gh-approvals set provider folder ~/OneDrive/team && gh-approvals --user <login>`.
+- `set provider` — what the trays find each other through, kept in `config.json` for every run after: `folder <path>`, `onedrive <tenant id> <client id> [<drive> [<redirect URI>]]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items. It's refused while the tray runs. To set it and start: `gh-approvals set provider folder ~/OneDrive/team && gh-approvals --user <login>`.
 
-For a team on OneDrive, the base is a folder everyone can reach — `/sites/{siteId}/drive/root:/gh-approvals` in a SharePoint site, or `/drives/{driveId}/root:/gh-approvals` — not the App folder, which is each user's own.
+For a team on OneDrive, the drive is one everyone can reach — `/sites/{siteId}/drive` (a SharePoint site's library) or `/drives/{driveId}` — not `/me/drive`, which is each user's own. The trays signal in the app's App folder on it.
 
 ## What it checks
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRtcHost, oneDriveApp, oneDriveBase, oneDriveSignaling, parseProvider, signalingFor } from './index.js';
+import { createRtcHost, oneDriveApp, oneDriveFolder, oneDriveSignaling, parseProvider, signalingFor } from './index.js';
 import type { Device, RtcHost } from './index.js';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
@@ -50,21 +50,21 @@ function fakeGraph(root: string) {
   return { fetch, files, calls, refuseNoMore: () => { refuse = ''; } };
 }
 
-test('a OneDrive base is the item it starts from and the folder under it', () => {
-  assert.deepEqual(oneDriveBase(), { root: '/me/drive/special/approot', folder: '', appFolder: true });
-  assert.deepEqual(oneDriveBase('/sites/contoso.sharepoint.com,1,2/drive/root:/gh-approvals:'), { root: '/sites/contoso.sharepoint.com,1,2/drive/root', folder: 'gh-approvals', appFolder: false });
-  assert.deepEqual(oneDriveBase('/drives/b!abc/root:/team/signal/'), { root: '/drives/b!abc/root', folder: 'team/signal', appFolder: false });
-  assert.throws(() => oneDriveBase('drives/x'));
-  // the App folder asks only for itself; anywhere else, for the user's files
+test('OneDrive signals in the App folder of whichever drive it\'s given', () => {
+  assert.equal(oneDriveFolder(), '/me/drive/special/approot');
+  assert.equal(oneDriveFolder('/drives/b!abc'), '/drives/b!abc/special/approot');
+  assert.equal(oneDriveFolder('/sites/contoso.sharepoint.com,1,2/drive/'), '/sites/contoso.sharepoint.com,1,2/drive/special/approot');
+  assert.equal(oneDriveFolder('/drives/b!abc/special/approot'), '/drives/b!abc/special/approot');
+  assert.throws(() => oneDriveFolder('drives/x'));
+  assert.throws(() => oneDriveFolder('/drives/x/root:/y'));
   assert.deepEqual(oneDriveApp('tenant', 'client').scopes, ['Files.ReadWrite.AppFolder', 'offline_access']);
-  assert.deepEqual(oneDriveApp('tenant', 'client', '/drives/x/root:/y').scopes, ['Files.ReadWrite.All', 'offline_access']);
   assert.equal(oneDriveApp('tenant', 'client').tokenUrl, 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token');
 });
 
 test('a command line gives the same provider settings everywhere', () => {
   assert.deepEqual(parseProvider(['onedrive', 't', 'c']), { kind: 'onedrive', tenantId: 't', clientId: 'c' });
-  assert.deepEqual(parseProvider(['onedrive', 't', 'c', '/drives/x/root:/y', 'http://localhost:1234']),
-    { kind: 'onedrive', tenantId: 't', clientId: 'c', base: '/drives/x/root:/y', redirectUri: 'http://localhost:1234' });
+  assert.deepEqual(parseProvider(['onedrive', 't', 'c', '/drives/x', 'http://localhost:1234']),
+    { kind: 'onedrive', tenantId: 't', clientId: 'c', drive: '/drives/x', redirectUri: 'http://localhost:1234' });
   assert.deepEqual(parseProvider(['folder', 'here'], path => `/abs/${path}`), { kind: 'folder', path: '/abs/here' });
   assert.deepEqual(parseProvider(['dropbox']), { kind: 'dropbox' });
   assert.throws(() => parseProvider(['onedrive', 't']), /tenant id and a client id/);
@@ -73,7 +73,7 @@ test('a command line gives the same provider settings everywhere', () => {
 });
 
 test('hosts signaling through a OneDrive folder see each other, and connect', { timeout: 30_000 }, async () => {
-  const root = '/drives/b!team/root';
+  const root = '/drives/b!team/special/approot';
   const graph = fakeGraph(root);
   const realFetch = globalThis.fetch;
   globalThis.fetch = graph.fetch as typeof fetch;
@@ -87,7 +87,7 @@ test('hosts signaling through a OneDrive folder see each other, and connect', { 
       if (retry) graph.refuseNoMore();
       return retry ? 'fresh-token' : 'stale-token';
     };
-    const signaling = () => oneDriveSignaling(getToken, `${root}:/signal:`);
+    const signaling = () => oneDriveSignaling(getToken, '/drives/b!team');
     const a = createRtcHost(signaling(), {
       deviceId: 'a', name: 'A', iceServers: [],
       accept: channel => void channel.pipe.onMessage(text => channel.pipe.send(`a heard ${text}`)),
@@ -108,8 +108,8 @@ test('hosts signaling through a OneDrive folder see each other, and connect', { 
     link.close();
 
     assert.ok(tokens.includes(true), 'a refused token was refreshed');
-    assert.ok(graph.files.has('signal/devices/a.json') && graph.files.has('signal/devices/b.json'));
-    assert.ok(graph.calls.every(call => call.includes(`${root}:/signal/`)), 'everything stays under the base');
+    assert.ok(graph.files.has('devices/a.json') && graph.files.has('devices/b.json'));
+    assert.ok(graph.calls.every(call => call.includes(`${root}:/`)), 'everything stays in the App folder');
   } finally {
     await Promise.all(hosts.map(host => host.stop({ offline: false })));
     globalThis.fetch = realFetch;
