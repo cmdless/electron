@@ -16,9 +16,47 @@ const isTemporary = (name: string) => name.endsWith('.tmp');
 // Whatever keeps it in step across machines (OneDrive, Dropbox, a sync
 // client) only has to deliver the files: a network share that sends no file
 // events won't be noticed changing.
+//
+// The whole folder is watched once, recursively, and each event handed to
+// whoever's watching where it happened: on macOS every watch in a process
+// shares one event stream, rebuilt whenever a watch comes or goes, and
+// anything that happens while it's rebuilt is lost.
 export function folderFiles(root: string): SignalFiles {
   const at = (relative: string) => path.join(root, ...relative.split('/').filter(Boolean));
   let writes = 0;
+
+  // the one watcher, and who's listening where (by folder, as '/a/b')
+  type Listener = { changed: (name: string) => void; failed: (error: unknown) => void };
+  const listening = new Map<string, Set<Listener>>();
+  let watcher: FSWatcher | undefined;
+  const listen = async (folder: string, listener: Listener) => {
+    await fs.mkdir(at(folder), { recursive: true });
+    if (!watcher) {
+      const started = watchFolder(root, { recursive: true }, (_, filename) => {
+        if (!filename) return;
+        const parts = filename.split(path.sep);
+        const name = parts.pop()!;
+        for (const each of listening.get(`/${parts.join('/')}`) ?? []) each.changed(name);
+      });
+      started.on('error', error => {
+        if (watcher === started) watcher = undefined;
+        started.close();
+        for (const set of listening.values()) for (const each of [...set]) each.failed(error);
+      });
+      watcher = started;
+    }
+    const key = `/${folder.split('/').filter(Boolean).join('/')}`;
+    listening.set(key, (listening.get(key) ?? new Set()).add(listener));
+    return () => {
+      const set = listening.get(key);
+      set?.delete(listener);
+      if (set?.size === 0) listening.delete(key);
+      if (listening.size === 0) {
+        watcher?.close();
+        watcher = undefined;
+      }
+    };
+  };
 
   return {
     async write(relative, text) {
@@ -35,15 +73,15 @@ export function folderFiles(root: string): SignalFiles {
     watch(folder, onChanges, onError) {
       const directory = at(folder);
       let running = true;
-      let watcher: FSWatcher | undefined;
+      let unlisten: (() => void) | undefined;
       let retry: NodeJS.Timeout | undefined;
       // changes are handled one batch at a time, in order
       let handling: Promise<void> = Promise.resolve();
 
       const failed = (error: unknown) => {
         if (!running) return;
-        watcher?.close();
-        watcher = undefined;
+        unlisten?.();
+        unlisten = undefined;
         if (onError(error) === 'stop') return stop();
         retry = setTimeout(() => void start(), RETRY_MS);
       };
@@ -53,16 +91,18 @@ export function folderFiles(root: string): SignalFiles {
 
       async function start() {
         try {
-          await fs.mkdir(directory, { recursive: true });
-          // watched before it's listed, so nothing written in between is missed
-          watcher = watchFolder(directory, (_, name) => {
-            if (!name || isTemporary(name)) return;
-            handle(async () => {
-              const removed = await fs.access(path.join(directory, name)).then(() => false, () => true);
-              await onChanges([{ name, removed }], false);
-            });
+          // listened to before it's listed, so nothing written in between is missed
+          unlisten = await listen(folder, {
+            changed: name => {
+              if (isTemporary(name)) return;
+              handle(async () => {
+                const removed = await fs.access(path.join(directory, name)).then(() => false, () => true);
+                await onChanges([{ name, removed }], false);
+              });
+            },
+            failed,
           });
-          watcher.on('error', failed);
+          if (!running) return unlisten();
           const names = (await fs.readdir(directory)).filter(name => !isTemporary(name));
           handle(() => onChanges(names.map(name => ({ name, removed: false })), true));
         } catch (error) {
@@ -73,8 +113,8 @@ export function folderFiles(root: string): SignalFiles {
       function stop() {
         running = false;
         clearTimeout(retry);
-        watcher?.close();
-        watcher = undefined;
+        unlisten?.();
+        unlisten = undefined;
       }
 
       void start();
