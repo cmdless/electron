@@ -1,5 +1,5 @@
 import { defineProtocol } from '@cmdless/rpc-sdk';
-import type { IceServer } from '@cmdless/rtc-sdk';
+import type { IceServer, ProviderSettings } from '@cmdless/rtc-sdk';
 
 // Peerlink is one RTC host per device (@cmdless/rtc-sdk) with a registry of
 // offers on top: what it advertises is its offers, and a channel opened to
@@ -20,12 +20,8 @@ export type Offer = {
 export type AdvertisedOffer = Omit<Offer, 'address'>;
 
 // what carries this device's advertisement and its signaling - one at a
-// time: Dropbox (peerlink's own app, or yours by its key and a redirect URI
-// registered for it), or a folder every device can write to, such as one a
-// sync client keeps in step
-export type ProviderSettings =
-  | { kind: 'dropbox'; appKey?: string; redirectUri?: string }
-  | { kind: 'folder'; path: string };
+// time, as rtc-sdk configures any host's
+export type { ProviderSettings };
 
 // settings.json
 export type SettingsState = {

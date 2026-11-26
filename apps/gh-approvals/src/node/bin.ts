@@ -16,8 +16,10 @@ import { DEFAULT_POLL_SECONDS, Inbox } from './inbox.js';
 import { connect, serve, trayProtocol, userOf } from './peers.js';
 import type { SentItem, Tray, TrayInfo } from './peers.js';
 import { memory } from '@cmdless/rpc-sdk';
-import { createRtcHost, folderSignaling } from '@cmdless/rtc-sdk/node';
-import type { RtcHost } from '@cmdless/rtc-sdk/node';
+import { accountOf, createRtcHost, parseProvider, providerLabel, providerName, providerUsage, signalingFor } from '@cmdless/rtc-sdk/node';
+import type { ProviderSettings, RtcHost } from '@cmdless/rtc-sdk/node';
+import { ensureAuth, providerKey } from '@cmdless/auth-sdk/node';
+import type { ProviderStatus } from '@cmdless/auth-sdk/node';
 import { createLog, logFile } from './log.js';
 import { coalesce, firstLine } from './util.js';
 import { logViewer } from './logViewer.js';
@@ -41,17 +43,29 @@ const NOTIFICATION_SETTINGS = 'https://github.com/settings/notifications';
 const TITLE_LENGTH = 60;
 
 // --user <login>: the GitHub account this runs for
-// --share <folder>: the folder the trays find each other through - kept in
-//   config.json, so it's needed only to change it ('' stops sharing)
 // --org <owner>: only what's in this owner's repositories (repeatable)
-const { values: args } = parseArgs({
-  options: { user: { type: 'string' }, share: { type: 'string' }, org: { type: 'string', multiple: true } },
+// set provider ...: what the trays find each other through, kept in
+//   config.json for every run after - set provider none, and it's on its own
+const USAGE = `usage: ${appName} --user <github login> [--org <owner>]...
+       ${appName} set provider none
+${providerUsage(`${appName} set`, '       ')}`;
+const { values: args, positionals } = parseArgs({
+  allowPositionals: true,
+  options: { user: { type: 'string' }, org: { type: 'string', multiple: true } },
 });
-if (!args.user) {
-  console.error(`usage: ${appName} --user <github login> [--share <folder>] [--org <owner>]...`);
+// the provider set provider gives - null for none
+let setProvider: ProviderSettings | null | undefined;
+try {
+  if (positionals.length) {
+    const [command, setting, ...rest] = positionals;
+    if (command !== 'set' || setting !== 'provider') throw new Error(`no command ${positionals.join(' ')}`);
+    setProvider = rest[0] === 'none' && rest.length === 1 ? null : parseProvider(rest, to => path.resolve(to));
+  } else if (!args.user) throw new Error('--user is needed');
+} catch (error) {
+  console.error(`${firstLine(error)}\n\n${USAGE}`);
   process.exit(2);
 }
-const user = args.user;
+const user = args.user ?? '';
 const orgs = (args.org ?? []).map(org => org.toLowerCase());
 
 // the app's own host, named after the package - running this again joins the
@@ -59,11 +73,11 @@ const orgs = (args.org ?? []).map(org => org.toLowerCase());
 const host = await UIHost.create({ app: pkg.name });
 
 // it's already running, tray and all, so there's nothing more to do here -
-// but a share it was given would go unheard
+// and a setting would be written over by it, so it isn't changed
 if (!host.params.hasSingleInstanceLock) {
   host.dispose();
-  if (args.share !== undefined) {
-    console.error(`${appName} is already running - quit it first to change --share`);
+  if (setProvider !== undefined) {
+    console.error(`${appName} is running - quit it first to change its provider`);
     process.exit(1);
   }
   process.exit(0);
@@ -83,8 +97,8 @@ const inbox = new Inbox(github, user, orgs);
 type Config = {
   // this machine, as the other trays know it
   deviceId: string;
-  // the folder the trays find each other through - none, and it's on its own
-  share?: { kind: 'folder'; path: string };
+  // what the trays find each other through - none, and it's on its own
+  provider?: ProviderSettings;
   autoMarkDone: boolean;
   lastRefresh?: { at: string; requests: number; quotaCosting: number };
   rateLimit?: RateLimit;
@@ -96,9 +110,21 @@ const config: Config = {
   ...JSON.parse(await fs.promises.readFile(configFile, 'utf8').catch(() => '{}')) as Partial<Config>,
 };
 const saveConfig = () => writeAtomic(configFile, `${JSON.stringify(config, null, 2)}\n`);
-if (args.share !== undefined) config.share = args.share ? { kind: 'folder', path: path.resolve(args.share) } : undefined;
+// a share from before providers is a folder provider
+const { share } = config as { share?: { path: string } };
+if (share) {
+  config.provider ??= { kind: 'folder', path: share.path };
+  delete (config as { share?: unknown }).share;
+}
+if (setProvider !== undefined) {
+  config.provider = setProvider ?? undefined;
+  await saveConfig();
+  console.log(config.provider ? `sharing through ${providerLabel(config.provider)}` : 'not sharing');
+  host.dispose();
+  process.exit(0);
+}
 await saveConfig();
-log(config.share ? `started, sharing through ${config.share.path}` : 'started, not sharing');
+log(config.provider ? `started, sharing through ${providerLabel(config.provider)}` : 'started, not sharing');
 
 // this user's items, served to the other trays - what was there last time
 // until the first scan
@@ -154,11 +180,22 @@ const actionId = (action: Action) => JSON.stringify(action);
 
 const titled = (title: string) => title.length > TITLE_LENGTH ? `${title.slice(0, TITLE_LENGTH - 1)}…` : title;
 
-// the tray as a device on the share - only while gh is signed in as this
-// user, which is when the tray takes part at all
+// the tray as a device on the provider - only while gh is signed in as this
+// user, which is when the tray takes part at all, and while the provider's
+// account (if it has one) is signed in
 let rtc: RtcHost<TrayInfo> | undefined;
-const signaling = config.share && folderSignaling(config.share.path);
 const session = crypto.randomUUID();
+const provider = config.provider;
+// the provider's account, signed in to through the auth broker - which
+// keeps the sign-in for every run after, and for anything else using it
+const account = provider && accountOf(provider);
+const auth = account && await ensureAuth(fileURLToPath(import.meta.resolve('@cmdless/auth/daemon')));
+// the broker's sign-in to it, as last heard
+let accountStatus: ProviderStatus['status'] = 'signed-out';
+const signaling = provider && signalingFor(provider, async () => {
+  if (!auth || !account) throw new Error('not signed in');
+  return (await auth.request.getToken({ provider: account, interactive: false })).accessToken;
+});
 
 // Check Now, with GitHub's rate limit beside it: what's left this hour of
 // how much, and what the last refresh cost of how many requests it made
@@ -250,6 +287,11 @@ function menu(): TrayMenuItem[] {
           { id: 'log-viewer', label: 'Log Viewer...' },
           { type: 'separator' },
           { type: 'checkbox', id: 'auto-mark-done', label: 'Automatically Mark as Done', checked: config.autoMarkDone },
+          // the provider's account, while it's signed in
+          ...(account && accountStatus === 'signed-in' ? [
+            { type: 'separator' },
+            { id: 'provider-logout', label: `Logout of ${providerName(provider!)}` },
+          ] satisfies TrayMenuItem[] : []),
         ],
       }
       : signingIn
@@ -258,6 +300,11 @@ function menu(): TrayMenuItem[] {
     // at the top, so refreshing is always right there
     { id: 'refresh', label: checkNowLabel(), enabled: usable },
     { type: 'separator' },
+    // a provider's account to sign in to first - where the others will be
+    ...(signedIn && account && accountStatus !== 'signed-in' ? [accountStatus === 'signing-in'
+      ? { id: 'provider-logging-in', label: `Logging in to ${providerName(provider!)}…`, enabled: false }
+      : { id: 'provider-login', label: `Login to ${providerName(provider!)}...`, enabled: !busy },
+    ] satisfies TrayMenuItem[] : []),
     ...(online ? [
       {
         type: 'submenu', label: `Users (${peers.length})`, enabled: usable && peers.length > 0,
@@ -286,7 +333,7 @@ const render = (changes: Partial<TrayParams> = {}) => tray.update({ ...changes, 
 // it, connect to it for its items and to ask it things, and it connects to
 // them for theirs
 function goOnline() {
-  if (rtc || !signaling) return;
+  if (rtc || !signaling || (account && accountStatus !== 'signed-in')) return;
   rtc = createRtcHost<TrayInfo>(signaling, {
     deviceId: config.deviceId,
     name: user,
@@ -308,9 +355,14 @@ function goOnline() {
     },
     // someone coming or going
     onDevices: follow,
-    onError: reason => { if (reason) log(`sharing through ${config.share!.path}: ${reason}`); },
+    onError: reason => { if (reason) log(`sharing through ${providerLabel(provider!)}: ${reason}`); },
+    // the account's sign-in refused: it's stopped itself, and waits for one
+    onStopped: reason => {
+      log(`stopped sharing: ${reason}`);
+      void goOffline().then(() => render());
+    },
   });
-  log(`sharing through ${config.share!.path}`);
+  log(`sharing through ${providerLabel(provider!)}`);
 }
 
 // not signed in (or leaving): every connection goes - theirs to this tray and
@@ -331,6 +383,7 @@ async function leave() {
   leaving = true;
   clearTimeout(nextPoll);
   await goOffline();
+  auth?.dispose();
   host.dispose();
   process.exit(0);
 }
@@ -635,6 +688,8 @@ tray.onEvent(event => {
   if (item === 'notifications') return void host.shell.openExternal(NOTIFICATIONS);
   if (item === 'auto-mark-done') return void toggleAutoMarkDone();
   if (item === 'log-viewer') return void showLog();
+  if (item === 'provider-login') return void providerLogin();
+  if (item === 'provider-logout') return void operation(providerLogout);
   if (!item.startsWith('{')) return;
 
   const action = JSON.parse(item) as Action;
@@ -717,5 +772,41 @@ async function approveOwn(item: Item, environmentId?: number) {
   }
   await refresh(true);
 }
+
+// the provider's account: signed in to in a window the broker opens, and
+// out of here - either way the broker says so, and the tray follows
+async function providerLogin() {
+  if (!auth || !account) return;
+  accountStatus = 'signing-in';
+  await render();
+  try {
+    await auth.request.getToken({ provider: account, interactive: true });
+    log(`logged in to ${providerName(provider!)}`);
+  } catch (error) {
+    log(`couldn't log in to ${providerName(provider!)}: ${firstLine(error)}`);
+    await render({ tooltip: `Couldn't log in to ${providerName(provider!)}: ${firstLine(error)}` });
+  } finally {
+    // whatever the broker says now, even if it had nothing new to say
+    followAccount(auth.state.providers.current);
+  }
+}
+
+async function providerLogout() {
+  if (!auth || !account) return;
+  await goOffline();
+  await auth.request.signOut({ provider: account });
+  log(`logged out of ${providerName(provider!)}`);
+}
+
+// the broker's sign-in to the provider's account, kept up with: signed in,
+// the tray joins the others (once gh is too); signed out, it leaves them
+function followAccount(providers: Record<string, ProviderStatus> | undefined) {
+  accountStatus = (account && providers?.[providerKey(account)]?.status) || 'signed-out';
+  if (accountStatus === 'signed-in') {
+    if (signedIn) goOnline();
+  } else void goOffline();
+  void render();
+}
+if (auth) await auth.state.providers.subscribe(followAccount);
 
 void operation(() => refresh(true));

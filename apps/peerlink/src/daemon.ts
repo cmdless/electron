@@ -5,12 +5,12 @@ import { memory } from '@cmdless/rpc-sdk';
 import { createSocketServer, file } from '@cmdless/rpc-sdk/node';
 import { getPeerlinkSocketPath, peerlinkProtocol } from '@cmdless/peerlink-sdk/node';
 import type { AccountState, Device, OfferParams, PeerlinkInfo, ProviderSettings } from '@cmdless/peerlink-sdk';
-import { createRtcHost, dropboxApp, dropboxSignaling, folderSignaling } from '@cmdless/rtc-sdk/node';
+import { accountOf, createRtcHost, providerLabel, signalingFor } from '@cmdless/rtc-sdk/node';
 import type { Device as RtcDevice, RtcHost } from '@cmdless/rtc-sdk/node';
 import { ensureAuth, providerKey } from '@cmdless/auth-sdk/node';
 import type { ProviderStatus } from '@cmdless/auth-sdk/node';
 import { relay, targetOf } from './links.js';
-import { defaultSettings, providerLabel, settingsPath, validSettings } from './settings.js';
+import { defaultSettings, settingsPath, validSettings } from './settings.js';
 import { showTrayWhileSet } from './tray.js';
 
 // what a client sent, checked before it becomes an offer
@@ -73,21 +73,18 @@ async function main() {
   await store.update('settings', settings => ({ ...defaultSettings(), ...settings }));
   await store.update('host', host => { host.status = 'ready'; });
 
-  // the auth broker holds any Dropbox sign-in - found at start without ever
-  // opening a window, or made later by signIn (here, or by anything else
-  // asking the broker)
+  // the auth broker holds any sign-in to the provider's account - found at
+  // start without ever opening a window, or made later by signIn (here, or
+  // by anything else asking the broker)
   const authDaemonPath = fileURLToPath(import.meta.resolve('@cmdless/auth/daemon'));
   const auth = await ensureAuth(authDaemonPath);
   const setAccount = (account: AccountState) => store.set({ account });
 
-  // the provider's Dropbox app, if it's Dropbox - a folder has no account
-  const appOf = (provider: ProviderSettings) => provider.kind === 'dropbox' ? dropboxApp(provider.appKey, provider.redirectUri) : undefined;
+  // the provider's account, if it has one - a folder doesn't
+  const appOf = (provider: ProviderSettings) => accountOf(provider);
 
-  const signalingFor = (provider: ProviderSettings) => {
-    if (provider.kind === 'folder') return folderSignaling(provider.path);
-    const app = dropboxApp(provider.appKey, provider.redirectUri);
-    return dropboxSignaling(async () => (await auth.request.getToken({ provider: app, interactive: false })).accessToken);
-  };
+  const signalingOf = (provider: ProviderSettings) => signalingFor(provider, async () =>
+    (await auth.request.getToken({ provider: appOf(provider)!, interactive: false })).accessToken);
 
   // what this device advertises: its offers, without their addresses
   const advertised = (): PeerlinkInfo => ({
@@ -116,7 +113,7 @@ async function main() {
     if (host) return;
     void setAccount({ status: 'syncing' });
     const settings = store.state.settings;
-    const started: RtcHost<PeerlinkInfo> = host = createRtcHost<PeerlinkInfo>(signalingFor(settings.provider), {
+    const started: RtcHost<PeerlinkInfo> = host = createRtcHost<PeerlinkInfo>(signalingOf(settings.provider), {
       deviceId: settings.deviceId,
       name: settings.deviceName,
       iceServers: settings.iceServers,
@@ -142,7 +139,7 @@ async function main() {
     await stopping?.stop({ offline });
   };
 
-  // syncs while the provider's account lets it: a folder always, Dropbox
+  // syncs while the provider's account lets it: a folder always, an account
   // while the broker holds a sign-in to its app
   function follow() {
     const app = appOf(store.state.settings.provider);

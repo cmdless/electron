@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { connectOrStart, nothingAnswers } from '@cmdless/core/node';
 import { connectPeerlink } from '@cmdless/peerlink-sdk/node';
-import { dropboxApp } from '@cmdless/rtc-sdk';
+import { accountOf, parseProvider, providerLabel, providerUsage } from '@cmdless/rtc-sdk';
 import type { SettingsState, SettingsUpdate } from '@cmdless/peerlink-sdk';
 import { ensureAuth } from '@cmdless/auth-sdk/node';
-import { defaultSettings, providerLabel, settingsPath, validSettings } from './settings.js';
+import { defaultSettings, settingsPath, validSettings } from './settings.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const daemonPath = path.join(__dirname, 'daemon.js');
@@ -20,17 +20,11 @@ const USAGE = `usage: peerlink <command>
                                and --no-tray also set whether it shows a tray
   stop                         stop the daemon
   status                       print the daemon's state
-  sign-in                      sign in to the provider (Dropbox)
-  sign-out                     sign out of the provider (Dropbox)
+  sign-in                      sign in to the provider's account
+  sign-out                     sign out of the provider's account
   set <setting> <value>        change a setting: name, heartbeat (seconds),
                                or tray (true or false)
-  set provider dropbox [<key> [<redirect>]]
-                               sync through Dropbox - peerlink's own app, or
-                               yours: its app key, and a redirect URI
-                               registered for it (http://localhost/cmdless-auth
-                               if it's left out)
-  set provider folder <path>   sync through a folder every device can write
-                               to, such as a synced one
+${providerUsage('set')}
 
 Only start starts the daemon. The rest work on whatever's running - sign-in,
 sign-out and set work without it too.`;
@@ -57,22 +51,10 @@ const read = async <T>(channel: { subscribe: (listener: (state: T) => void) => P
 };
 
 // a setting as the command line gives it
-function settingFrom([name, value, extra, more]: string[]): SettingsUpdate {
+function settingFrom([name, value, ...more]: string[]): SettingsUpdate {
   if (name === undefined || value === undefined) throw new Error('set takes a setting and a value');
   switch (name) {
-    case 'provider':
-      if (value === 'dropbox') return validSettings({
-        provider: {
-          kind: 'dropbox',
-          ...(extra !== undefined && { appKey: extra }),
-          ...(more !== undefined && { redirectUri: more }),
-        },
-      });
-      if (value === 'folder') {
-        if (extra === undefined) throw new Error('set provider folder takes the folder');
-        return validSettings({ provider: { kind: 'folder', path: path.resolve(extra) } });
-      }
-      throw new Error('the provider is dropbox or folder');
+    case 'provider': return validSettings({ provider: parseProvider([value, ...more], to => path.resolve(to)) });
     case 'name': return validSettings({ deviceName: value });
     case 'heartbeat': return validSettings({ heartbeatSeconds: Number(value) });
     case 'tray':
@@ -174,8 +156,8 @@ async function main() {
         }
       } else {
         const { provider } = await readSettings();
-        if (provider.kind !== 'dropbox') throw new Error(`${providerLabel(provider)} has no account to sign ${command === 'sign-in' ? 'in to' : 'out of'}`);
-        const app = dropboxApp(provider.appKey, provider.redirectUri);
+        const app = accountOf(provider);
+        if (!app) throw new Error(`${providerLabel(provider)} has no account to sign ${command === 'sign-in' ? 'in to' : 'out of'}`);
         const broker = await auth();
         try {
           if (command === 'sign-in') await broker.request.getToken({ provider: app, interactive: true });

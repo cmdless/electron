@@ -5,3 +5,5 @@ export * from './dropbox.js';
 export * from './pipes.js';
 export * from './rtc.js';
 export * from './host.js';
+export * from './onedrive.js';
+export * from './settings.js';

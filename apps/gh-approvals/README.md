@@ -3,12 +3,15 @@
 GitHub approvals, from the tray: the pull requests your review is requested on and the deployments waiting on your approval, from your notification inbox — and everyone else's, straight from their trays.
 
 ```
-gh-approvals --user <github login> [--share <folder>] [--org <owner>]...
+gh-approvals --user <github login> [--org <owner>]...
+gh-approvals set provider <provider>...
 ```
 
 - `--user` — the GitHub account it runs for. [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
-- `--share` — the folder the trays find each other through. It's kept in `config.json`, so it's only needed to change it; `--share ""` stops sharing. Without one, the tray shows just your own items. It can't be changed while the tray runs.
 - `--org` — only what's in this owner's repositories. Repeat it for more.
+- `set provider` — what the trays find each other through, kept in `config.json` for every run after: `folder <path>`, `onedrive <tenant id> <client id> [<base> [<redirect URI>]]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items. It's refused while the tray runs. To set it and start: `gh-approvals set provider folder ~/OneDrive/team && gh-approvals --user <login>`.
+
+For a team on OneDrive, the base is a folder everyone can reach — `/sites/{siteId}/drive/root:/gh-approvals` in a SharePoint site, or `/drives/{driveId}/root:/gh-approvals` — not the App folder, which is each user's own.
 
 ## What it checks
 
@@ -22,7 +25,9 @@ Every request is conditional on what GitHub answered last, kept in `github-cache
 
 ## The other trays
 
-While it's signed in and has a share, a tray is a device on it — an [RTC host](../../packages/rtc-sdk), signaling through the folder — and the trays reach each other over WebRTC, not by host name: on one network by their local addresses, across networks through STUN. The folder only carries their advertisements and the offers and answers that connect them; nothing of anyone's items is written there. It can be any folder every tray can write, kept in step between machines by a sync client (OneDrive, Dropbox, ...) or local to one. Anyone who can write it can reach every running tray; the share is the trust.
+While it's signed in and has a provider, a tray is a device on it — an [RTC host](../../packages/rtc-sdk) — and the trays reach each other over WebRTC, not by host name: on one network by their local addresses, across networks through STUN. The provider only carries their advertisements and the offers and answers that connect them; nothing of anyone's items is written there. Anyone who can write where it signals can reach every running tray; that's the trust.
+
+A provider with an account (OneDrive, Dropbox) is signed in to through the [auth broker](../../apps/auth), which keeps the sign-in for every run after. Until it is, **Login to OneDrive...** stands where **Users** would; once it is, **Users** takes its place, and **Logout of OneDrive** is at the end of the account menu.
 
 Each tray serves its user's items as a state channel, and connects to every other running tray — once each time that tray runs — to follow theirs: the whole list when it connects, then each change as it's made. Someone is listed under **Users** only while that connection is open, and with what all their trays have, so the same user on two machines is listed once. A tray that quits hangs up on everyone, and one that's gone quiet is marked offline after three missed heartbeats (three minutes). A tray that couldn't be reached isn't tried again until it runs again. Each machine is its own device, with its own id in `config.json`; your own other machines' trays aren't listed, since they have the same items.
 
@@ -39,6 +44,6 @@ A deployment is approved one environment at a time. A pull request marked `*` wa
 
 ## Elsewhere in userData
 
-- `config.json` — this machine's device id, the share, Automatically Mark as Done, and the last refresh's cost and rate limit.
+- `config.json` — this machine's device id, the provider, Automatically Mark as Done, and the last refresh's cost and rate limit.
 - `items.json` — your items as of the last refresh, served until the next one.
 - `log.txt` — what it did; **Log Viewer…** tails it in a window.
