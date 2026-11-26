@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@cmdless/rpc-sdk": "*",
+    "@cmdless/rtc-sdk": "*",
     "@cmdless/ui-sdk": "*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
