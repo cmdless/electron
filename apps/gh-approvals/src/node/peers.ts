@@ -1,24 +1,26 @@
 import { defineProtocol } from '@cmdless/rpc-sdk';
-import type { RtcHost, RtcChannel } from '@cmdless/rtc-sdk/node';
-import type { Item } from './files.js';
+import type { IncomingChannel, RtcHost } from '@cmdless/rtc-sdk/node';
+import type { Item, Items } from './items.js';
 
 // something one tray can send another: a pull request to review, or a
 // deployment to approve - what it is, and where
 export type SentItem = Pick<Item, 'kind' | 'title' | 'url'>;
 
-// what each tray says about itself: when its files last changed - so the
-// others only re-read them when they have - and which run of it this is
-export type TrayInfo = { lastUpdatedAt: string; session: string };
+// what each tray says about itself: whose it is, and which run of it this is
+// - a tray is connected to once a run
+export type TrayInfo = { user: string; session: string };
 
-// the channel trays talk over, one each way between every two
-export const PEER_LABEL = 'gh-approvals/peer';
+// the channel trays talk over, one each way between every two - its label
+// says whose tray opened it
+const TRAY_LABEL = 'gh-approvals/tray/';
+export const userOf = (label: string) => label.startsWith(TRAY_LABEL) ? label.slice(TRAY_LABEL.length) || undefined : undefined;
 
-// Every running tray is an RTC host on the data folder, and keeps a
-// connection open to every other one; a tray is listed only while its
-// connection is open. Whoever can write the folder can reach them all - the
-// folder is the trust.
-export const peerProtocol = defineProtocol(({ side, request }) => ({
-  name: 'gh-approvals/peer',
+// Every running tray is an RTC host on the share, serving its user's items to
+// every other one, and connected to every other one for theirs. A tray is
+// listed only while its connection is open. Whoever can write the share can
+// reach them all - the share is the trust.
+export const trayProtocol = defineProtocol(({ side, request, state }) => ({
+  name: 'gh-approvals/tray',
   clientToServer: side({
     requests: {
       // look again, now: someone pressed Check Now
@@ -30,34 +32,40 @@ export const peerProtocol = defineProtocol(({ side, request }) => ({
       approve: request<{ url: string; environment?: number }>('approve'),
     },
   }),
+  state: {
+    // what's waiting on its user, kept up to date as it changes
+    items: state<Items>('items'),
+  },
 }));
 
-export type Peer = ReturnType<typeof peerProtocol.createClient>;
+export type Tray = ReturnType<typeof trayProtocol.createClient>;
+export type TrayStore = Awaited<ReturnType<typeof trayProtocol.createStore>>;
 
-export type PeerHandlers = {
+export type TrayHandlers = {
   refresh(from: string): void;
   requestApproval(from: string, item: SentItem): void;
   approve(from: string, url: string, environment?: number): Promise<void>;
 };
 
-// another tray's channel to this one, served - everything it asks is from
-// whoever it came from
-export function serve(channel: RtcChannel & { from: string }, handlers: PeerHandlers) {
-  const { from } = channel;
-  peerProtocol.accept(server => {
+// another tray's channel to this one, served from this tray's store -
+// everything it asks is from its user
+export function serve(channel: IncomingChannel, from: string, store: TrayStore, handlers: TrayHandlers) {
+  trayProtocol.accept(server => {
     server.onRequest.refresh(() => handlers.refresh(from));
     server.onRequest.requestApproval(({ item }) => handlers.requestApproval(from, item));
     server.onRequest.approve(({ url, environment }) => handlers.approve(from, url, environment));
-  })(channel.connection()).listen();
+  }, store)(channel.connection()).listen();
 }
 
-// a connection to another tray, and the channel to ask it things on
-export async function connect(host: RtcHost<TrayInfo>, user: string) {
-  const link = await host.connect(user);
+// a connection to another tray, as this user's, and the channel to ask it
+// things on and follow its items through
+export async function connect(host: RtcHost<TrayInfo>, deviceId: string, user: string) {
+  const link = await host.connect(deviceId);
   try {
-    const peer = peerProtocol.createClient((await link.open(PEER_LABEL)).connection());
-    peer.listen();
-    return { peer, onClose: link.onClose, close: link.close };
+    const tray = trayProtocol.createClient((await link.open(`${TRAY_LABEL}${user}`)).connection());
+    tray.listen();
+    await tray.checkVersion();
+    return { tray, onClose: link.onClose, close: link.close };
   } catch (error) {
     link.close();
     throw error;

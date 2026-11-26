@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { DeploymentItem, Environment } from './files.js';
+import type { DeploymentItem, Environment } from './items.js';
 
 const run = promisify(execFile);
 
