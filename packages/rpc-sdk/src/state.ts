@@ -30,6 +30,10 @@ export type RpcStore<S extends Record<string, unknown>> = {
   // edits a copy of one channel's state; the draft is changed in place, or
   // a returned value replaces it
   update: <K extends keyof S>(channel: K, edit: (draft: S[K]) => S[K] | void) => Promise<void>;
+  // applies a JSON Patch to one channel as it is, and sends those same ops
+  // on - for passing on another channel's changes without diffing again.
+  // Ops that don't apply throw, and leave the state as it was.
+  patch: <K extends keyof S>(channel: K, ops: Operation[]) => Promise<void>;
   // what a connection's subscription hangs off: the state to start from,
   // and every patch after it
   watch: <K extends keyof S>(channel: K, listener: (patch: StatePatch) => void) => StateWatch<S[K]>;
@@ -117,31 +121,37 @@ export async function createStore<C extends RpcStates>(
       throw new Error(`unknown state channel: ${String(channel)}`);
   }
 
+  // a change to one channel, already worked out: the state it ends at and
+  // the ops that took it there - sent to its watchers at once, and saved
+  function commit(channel: keyof S, next: S[keyof S], ops: Operation[]) {
+    const previous = state[channel];
+    state[channel] = next;
+    const seq = seqs.get(channel)! + 1;
+    seqs.set(channel, seq);
+    for (const listener of listeners.get(channel) ?? [])
+      listener({ seq, ops });
+    return savers.get(channel)?.({ state: next, previous, ops });
+  }
+
+  // a caller that doesn't await this mustn't crash the process when a save
+  // fails - one that does still sees the error
+  function settled(saves: (Promise<void> | undefined)[]) {
+    const saved = Promise.all(saves).then(() => { });
+    saved.catch(() => { });
+    return saved;
+  }
+
   function set(partial: Partial<S>) {
-    const saves: Promise<void>[] = [];
+    const saves: (Promise<void> | undefined)[] = [];
     for (const channel of Object.keys(partial) as (keyof S)[]) {
       assertChannel(channel);
       // owned from here on, so a caller mutating what it passed in can't
       // change state behind the diff's back
       const next = structuredClone(partial[channel]) as S[keyof S];
-      const previous = state[channel];
-      const ops = diff(previous, next);
-      if (ops.length === 0) continue;
-
-      state[channel] = next;
-      const seq = seqs.get(channel)! + 1;
-      seqs.set(channel, seq);
-      for (const listener of listeners.get(channel) ?? [])
-        listener({ seq, ops });
-
-      const save = savers.get(channel);
-      if (save) saves.push(save({ state: next, previous, ops }));
+      const ops = diff(state[channel], next);
+      if (ops.length > 0) saves.push(commit(channel, next, ops));
     }
-    // a caller that doesn't await this mustn't crash the process when a
-    // save fails - one that does still sees the error
-    const saved = Promise.all(saves).then(() => { });
-    saved.catch(() => { });
-    return saved;
+    return settled(saves);
   }
 
   return {
@@ -156,6 +166,14 @@ export async function createStore<C extends RpcStates>(
       const draft = structuredClone(state[channel]);
       const result = edit(draft);
       return set({ [channel]: result === undefined ? draft : result } as unknown as Partial<S>);
+    },
+    patch(channel, ops) {
+      assertChannel(channel);
+      if (ops.length === 0) return settled([]);
+      // applied to a copy, so ops that fail part way leave nothing behind,
+      // and to ops of its own, so what's sent on shares nothing with state
+      const next = jsonpatch.applyPatch(structuredClone(state[channel]), structuredClone(ops), true, true).newDocument;
+      return settled([commit(channel, next, structuredClone(ops))]);
     },
     watch(channel, listener) {
       assertChannel(channel);
@@ -213,10 +231,25 @@ export function serveStore<S extends Record<string, unknown>>(connection: Messag
   connection.onDispose(closeAll);
 }
 
+// a channel's ops moved under path in another one - to pass its changes on
+// as one entry of a bigger state. A whole replace becomes an add there, so
+// it works whether or not the entry is there yet.
+export function prefixOps(ops: Operation[], path: string): Operation[] {
+  return ops.map(op => op.path === '' && op.op === 'replace'
+    ? { op: 'add', path, value: op.value }
+    : { ...op, path: `${path}${op.path}`, ...'from' in op && { from: `${path}${op.from}` } } as Operation);
+}
+
+// what a subscription's listener is called with: the state, and the ops that
+// took it there from the state the listener had - a whole replace for the
+// first state, and whenever the channel had to be fetched again. The ops are
+// the state's own values: read them, don't change them.
+export type StateListener<T> = (state: T, ops: Operation[]) => void;
+
 export type StateSubscription<T> = {
   // calls listener with the state now, then again after every change;
   // resolves once the first state has arrived, to what stops listening
-  subscribe: (listener: (state: T) => void) => Promise<() => void>;
+  subscribe: (listener: StateListener<T>) => Promise<() => void>;
   // the latest state, while anything is subscribed
   readonly current: T | undefined;
 };
@@ -224,7 +257,7 @@ export type StateSubscription<T> = {
 export type ClientState<S extends Record<string, unknown>> = { [K in keyof S]: StateSubscription<S[K]> };
 
 type Mirror = {
-  listeners: Set<(state: any) => void>;
+  listeners: Set<StateListener<any>>;
   state?: unknown;
   seq: number;
   // set while a subscribe is in flight; patches arriving meanwhile wait here
@@ -239,8 +272,9 @@ type Mirror = {
 export function mirrorState<S extends Record<string, unknown>>(connection: MessageConnection, channels: RpcStates): ClientState<S> {
   const mirrors = new Map<string, Mirror>();
 
-  const notify = (mirror: Mirror) => {
-    for (const listener of mirror.listeners) listener(mirror.state);
+  const whole = (mirror: Mirror): Operation[] => [{ op: 'replace', path: '', value: mirror.state }];
+  const notify = (mirror: Mirror, ops: Operation[]) => {
+    for (const listener of mirror.listeners) listener(mirror.state, ops);
   };
 
   function apply(mirror: Mirror, patch: PatchParams) {
@@ -251,7 +285,7 @@ export function mirrorState<S extends Record<string, unknown>>(connection: Messa
     }
     mirror.state = jsonpatch.applyPatch(mirror.state, patch.ops, false, false).newDocument;
     mirror.seq = patch.seq;
-    notify(mirror);
+    notify(mirror, patch.ops);
   }
 
   async function resubscribe(channel: string, mirror: Mirror) {
@@ -265,7 +299,7 @@ export function mirrorState<S extends Record<string, unknown>>(connection: Messa
         mirror.pending = undefined;
       }
       const queued = mirror.queued.splice(0);
-      notify(mirror);
+      notify(mirror, whole(mirror));
       for (const patch of queued) apply(mirror, patch);
     })();
     return mirror.pending;
@@ -298,7 +332,7 @@ export function mirrorState<S extends Record<string, unknown>>(connection: Messa
           mirror.listeners.add(listener);
           // a snapshot in flight calls every listener once it lands
           if (mirror.pending) await mirror.pending;
-          else listener(mirror.state);
+          else listener(mirror.state, whole(mirror));
         }
 
         const subscribed = mirror;
