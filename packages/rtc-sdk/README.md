@@ -22,7 +22,7 @@ const client = myProtocol.createClient((await link.open('my-protocol')).connecti
 
 ## Hosts
 
-`createRtcHost(provider, options)` — from `/node` (WebRTC by [werift](https://github.com/shinyoshiaki/werift-webrtc)) or `/browser` (the browser's own). A browser tab is as much a host as anything else, for as long as it's open. `createHost(webrtc, provider, options)` takes any other WebRTC behind the small `WebRtc` interface.
+`createRtcHost(provider, options)` — from `/node` (WebRTC by [node-datachannel](https://github.com/murat-dogan/node-datachannel)'s standard `RTCPeerConnection`, over libdatachannel — prebuilt for each platform, nothing built or run at install) or `/browser` (the browser's own). A browser tab is as much a host as anything else, for as long as it's open. `createHost(webrtc, provider, options)` takes any other WebRTC behind the small `WebRtc` interface.
 
 - `deviceId`, `name`, `info`, `iceServers` (STUN by default) and `heartbeatSeconds` (60) are what it advertises; `update({ ... })` changes any of them. A device that misses three heartbeats shows as offline, and one that stops cleanly is marked offline straight away.
 - `accept` gets every channel another device opens: its `label`, who it's `from` (as that device said — the provider's own trust is all that vouches for it), its `pipe` of whole messages, and `connection()` — the pipe as a JSON-RPC connection for any [`@cmdless/rpc-sdk`](../rpc-sdk) protocol. Returning `false` (or throwing) refuses it, and the side that opened it sees `open` fail. Without `accept`, the host answers no one.

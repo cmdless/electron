@@ -83,8 +83,7 @@ const channelOf = (label: string, pipe: Pipe): RtcChannel => {
 
 // The first message on a channel is the accepting side's verdict - so a
 // refused channel is closed by whoever opened it, never by the side it
-// reached the moment it arrived (which werift can't take: data for a channel
-// it's just dropped throws).
+// reached the moment it arrived, before the opener knows whether to send.
 const ACCEPTED = 'accepted';
 const REFUSED = 'refused';
 

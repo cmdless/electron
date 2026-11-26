@@ -8,8 +8,7 @@ export type Pipe = {
   close: () => void;
 };
 
-// the part of a data channel this needs - the browser's RTCDataChannel and
-// werift's both have it
+// the part of a data channel this needs - any standard RTCDataChannel has it
 export type DataChannelLike = {
   send(data: string): void;
   close(): void;

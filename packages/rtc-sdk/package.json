@@ -38,6 +38,6 @@
   },
   "dependencies": {
     "@cmdless/rpc-sdk": "*",
-    "werift": "0.25.1"
+    "node-datachannel": "0.33.6"
   }
 }
