@@ -17,7 +17,8 @@ export type FolderProvider = { kind: 'folder'; path: string };
 
 // the App folder on a OneDrive or SharePoint drive, through Microsoft Graph
 // and an Entra app: its tenant and client id, which drive's App folder, and
-// a redirect URI registered for the app (http://localhost if it's left out)
+// a redirect URI registered for the app (Microsoft's nativeclient page if
+// it's left out)
 export type GraphAppFolderProvider = {
   kind: 'graph-app-folder';
   tenantId: string;
@@ -105,7 +106,9 @@ provider folder <path>
     a folder every device can write to, such as one a sync client keeps
 provider graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]
     the App folder on a OneDrive or SharePoint drive, through an Entra app
-    (Mobile and desktop, redirect http://localhost if left out): your own
+    (Mobile and desktop, with the suggested redirect
+    https://login.microsoftonline.com/common/oauth2/nativeclient unless
+    another is given): your own
     OneDrive's (personal, the default) for your own devices, or one everyone
     shares - a document library's by its drive id, or a SharePoint site's
     default library's`;

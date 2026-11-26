@@ -5,10 +5,12 @@
 import { fileSignaling } from './providers.js';
 import type { FileChange, SignalFiles, SignalingProvider } from './providers.js';
 
-// where a sign-in is sent back to: a Mobile and desktop redirect, which
-// Microsoft lets any localhost URL be. Nothing has to answer there - the
-// sign-in window catches the redirect before it's requested.
-export const GRAPH_REDIRECT_URI = 'http://localhost';
+// where a sign-in is sent back to: Microsoft's own blank page for native
+// apps, offered as a suggested redirect for the Mobile and desktop platform -
+// so nothing of yours is hosted. Nothing has to answer at it anyway: the
+// sign-in window catches the redirect before it's requested. Any other
+// registered one (http://localhost, say) can be given instead.
+export const GRAPH_REDIRECT_URI = 'https://login.microsoftonline.com/common/oauth2/nativeclient';
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 

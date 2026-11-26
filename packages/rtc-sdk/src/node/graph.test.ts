@@ -57,6 +57,9 @@ test('a Graph App folder is personal, a drive\'s or a site\'s', () => {
   assert.throws(() => graphAppFolderPath({ type: 'drive', driveId: '' }));
   assert.throws(() => graphAppFolderPath({ type: 'site', siteId: 'a/b' }));
   assert.deepEqual(graphApp('tenant', 'client').scopes, ['Files.ReadWrite.AppFolder', 'offline_access']);
+  // nothing hosted: Microsoft's own page for native apps, unless another is given
+  assert.equal(graphApp('tenant', 'client').redirectUri, 'https://login.microsoftonline.com/common/oauth2/nativeclient');
+  assert.equal(graphApp('tenant', 'client', 'http://localhost').redirectUri, 'http://localhost');
   assert.equal(graphApp('tenant', 'client').tokenUrl, 'https://login.microsoftonline.com/tenant/oauth2/v2.0/token');
 });
 
