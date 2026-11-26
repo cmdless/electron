@@ -501,6 +501,21 @@ export class Host {
     return count;
   }
 
+  // whether any UIHost has a tray up - what the app goes on for once its
+  // windows are closed
+  get hasTray() {
+    for (const server of this.servers.values())
+      for (const handle of server.handles.values()) if (handle instanceof TrayHandle) return true;
+    return false;
+  }
+
+  // closes every window and dialog, across every UIHost - each told it's
+  // closed, as if the person had closed it
+  closeShown() {
+    for (const server of [...this.servers.values()])
+      for (const handle of [...server.handles.values()]) if (handle.showsInDock) handle.dispose();
+  }
+
   onHandlesChanged(listener: (count: number) => void) {
     this.handlesListeners.add(listener);
     return { dispose: () => { this.handlesListeners.delete(listener); } };
