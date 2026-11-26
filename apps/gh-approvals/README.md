@@ -1,13 +1,13 @@
 # @cmdless/gh-approvals
 
-GitHub approvals, from the tray: the pull requests your review is requested on and the deployments waiting on your approval, from your notification inbox — and everyone else's, from a folder you share.
+GitHub approvals, from the tray: the pull requests your review is requested on and the deployments waiting on your approval, from your notification inbox — and everyone else's, straight from their trays.
 
 ```
-gh-approvals --user <github login> [--data <folder>] [--org <owner>]...
+gh-approvals --user <github login> [--share <folder>] [--org <owner>]...
 ```
 
 - `--user` — the GitHub account it runs for. [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
-- `--data` — the folder every user's tray shares. Defaults to `data` in the app's own userData.
+- `--share` — the folder the trays find each other through. It's kept in `config.json`, so it's only needed to change it; `--share ""` stops sharing. Without one, the tray shows just your own items. It can't be changed while the tray runs.
 - `--org` — only what's in this owner's repositories. Repeat it for more.
 
 ## What it checks
@@ -20,17 +20,11 @@ Every request is conditional on what GitHub answered last, kept in `github-cache
 
 **Automatically Mark as Done** (off by default) marks a merged pull request's notification done, and a repository's approval requests once nothing there is waiting on you.
 
-## The shared folder
+## The other trays
 
-```
-{data}/{user}/pull_requests/{owner}/{repo}/{number}.json
-{data}/{user}/deployments/{owner}/{repo}/{runId}.json
-{data}/.rtc/                                              the trays finding and reaching each other
-```
+While it's signed in and has a share, a tray is a device on it — an [RTC host](../../packages/rtc-sdk), signaling through the folder — and the trays reach each other over WebRTC, not by host name: on one network by their local addresses, across networks through STUN. The folder only carries their advertisements and the offers and answers that connect them; nothing of anyone's items is written there. It can be any folder every tray can write, kept in step between machines by a sync client (OneDrive, Dropbox, ...) or local to one. Anyone who can write it can reach every running tray; the share is the trust.
 
-Each tray writes only its own user's folder, and reads everyone else's. Anyone who can write the folder can reach every running tray; the folder is the trust.
-
-While it's signed in, a tray is a device on the folder — an [RTC host](../../packages/rtc-sdk) named after its user, signaling through `.rtc` — and the trays reach each other over WebRTC, not by host name: on one network by their local addresses, across networks through STUN. Each says when its files last changed, so the others re-read a folder only when it has, and keeps a connection open to every other running tray, made once each time that tray runs. Someone is listed under **Users** only while that connection is open: a tray that quits hangs up on everyone, and one that's gone quiet is marked offline after three missed heartbeats (three minutes). A tray that couldn't be reached isn't tried again until it runs again.
+Each tray serves its user's items as a state channel, and connects to every other running tray — once each time that tray runs — to follow theirs: the whole list when it connects, then each change as it's made. Someone is listed under **Users** only while that connection is open, and with what all their trays have, so the same user on two machines is listed once. A tray that quits hangs up on everyone, and one that's gone quiet is marked offline after three missed heartbeats (three minutes). A tray that couldn't be reached isn't tried again until it runs again. Each machine is its own device, with its own id in `config.json`; your own other machines' trays aren't listed, since they have the same items.
 
 How quickly they find each other is how quickly the folder carries a file between machines — straight away on one machine, a few seconds through most sync clients.
 
@@ -38,12 +32,13 @@ How quickly they find each other is how quickly the folder carries a file betwee
 
 Each item opens with **View in Browser…**. Your own items have **Auto Approve** under it, with your account. Someone else's have:
 
-- **Request Approval** — a notification in their tray; clicking it opens the item.
-- **Auto Approve** — their tray approves it with *their* account, saying "Auto approved by {them} on behalf of {you}", and tells them it did.
+- **Request Approval** — a notification in each of their trays; clicking it opens the item.
+- **Auto Approve** — one of their trays approves it with *their* account, saying "Auto approved by {them} on behalf of {you}", and tells them it did.
 
-A deployment is approved one environment at a time. A pull request marked `*` was last pushed by whoever it's waiting on, so their approval won't count, and **Auto Approve** is off for it. **Request Refresh** in a user's menu asks just their tray to look again.
+A deployment is approved one environment at a time. A pull request marked `*` was last pushed by whoever it's waiting on, so their approval won't count, and **Auto Approve** is off for it. **Request Refresh** in a user's menu asks just their trays to look again.
 
 ## Elsewhere in userData
 
-- `config.json` — Automatically Mark as Done, and the last refresh's cost and rate limit.
+- `config.json` — this machine's device id, the share, Automatically Mark as Done, and the last refresh's cost and rate limit.
+- `items.json` — your items as of the last refresh, served until the next one.
 - `log.txt` — what it did; **Log Viewer…** tails it in a window.

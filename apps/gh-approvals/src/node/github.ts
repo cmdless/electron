@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { writeAtomic } from './files.js';
+import { writeAtomic } from './items.js';
 
 const API = 'https://api.github.com';
 

@@ -8,13 +8,14 @@ import { UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteWindow, TrayMenuItem, TrayParams } from '@cmdless/ui-sdk/node';
 import { ghInstalled, startLogin, tokenFor } from './accounts.js';
 import { approveDeployment, approvePullRequest } from './approvals.js';
-import { OwnItems, readItems, writeAtomic } from './files.js';
-import type { Item } from './files.js';
+import { byUrl, writeAtomic } from './items.js';
+import type { Item, Items } from './items.js';
 import { GitHub } from './github.js';
 import type { RateLimit } from './github.js';
 import { DEFAULT_POLL_SECONDS, Inbox } from './inbox.js';
-import { connect, PEER_LABEL, serve } from './peers.js';
-import type { Peer, SentItem, TrayInfo } from './peers.js';
+import { connect, serve, trayProtocol, userOf } from './peers.js';
+import type { SentItem, Tray, TrayInfo } from './peers.js';
+import { memory } from '@cmdless/rpc-sdk';
 import { createRtcHost, folderSignaling } from '@cmdless/rtc-sdk/node';
 import type { RtcHost } from '@cmdless/rtc-sdk/node';
 import { createLog, logFile } from './log.js';
@@ -40,15 +41,14 @@ const NOTIFICATION_SETTINGS = 'https://github.com/settings/notifications';
 const TITLE_LENGTH = 60;
 
 // --user <login>: the GitHub account this runs for
-// --data <folder>: the folder every user's tray shares - each writes its own
-//   {user} folder there, and reads everyone else's. A data folder in the
-//   app's own userData unless it's given.
+// --share <folder>: the folder the trays find each other through - kept in
+//   config.json, so it's needed only to change it ('' stops sharing)
 // --org <owner>: only what's in this owner's repositories (repeatable)
 const { values: args } = parseArgs({
-  options: { user: { type: 'string' }, data: { type: 'string' }, org: { type: 'string', multiple: true } },
+  options: { user: { type: 'string' }, share: { type: 'string' }, org: { type: 'string', multiple: true } },
 });
 if (!args.user) {
-  console.error(`usage: ${appName} --user <github login> [--data <folder>] [--org <owner>]...`);
+  console.error(`usage: ${appName} --user <github login> [--share <folder>] [--org <owner>]...`);
   process.exit(2);
 }
 const user = args.user;
@@ -58,18 +58,19 @@ const orgs = (args.org ?? []).map(org => org.toLowerCase());
 // one that's already up rather than starting another
 const host = await UIHost.create({ app: pkg.name });
 
-// it's already running, tray and all, so there's nothing more to do here
+// it's already running, tray and all, so there's nothing more to do here -
+// but a share it was given would go unheard
 if (!host.params.hasSingleInstanceLock) {
   host.dispose();
+  if (args.share !== undefined) {
+    console.error(`${appName} is already running - quit it first to change --share`);
+    process.exit(1);
+  }
   process.exit(0);
 }
 
-// a log in the app's own userData, wherever --data points
+// a log in the app's own userData
 const log = createLog(host.params.userData);
-
-const folder = path.resolve(args.data ?? path.join(host.params.userData, 'data'));
-await fs.promises.mkdir(path.join(folder, user), { recursive: true });
-log(`started, with data in ${folder}`);
 
 // GitHub, asked conditionally - what it last answered is kept in userData,
 // this machine's own business
@@ -80,34 +81,50 @@ const inbox = new Inbox(github, user, orgs);
 // this machine's own settings, in userData - and, beside them, what the last
 // refresh cost and where GitHub's rate limit stood after it
 type Config = {
+  // this machine, as the other trays know it
+  deviceId: string;
+  // the folder the trays find each other through - none, and it's on its own
+  share?: { kind: 'folder'; path: string };
   autoMarkDone: boolean;
   lastRefresh?: { at: string; requests: number; quotaCosting: number };
   rateLimit?: RateLimit;
 };
 const configFile = path.join(host.params.userData, 'config.json');
 const config: Config = {
+  deviceId: crypto.randomUUID(),
   autoMarkDone: false,
   ...JSON.parse(await fs.promises.readFile(configFile, 'utf8').catch(() => '{}')) as Partial<Config>,
 };
 const saveConfig = () => writeAtomic(configFile, `${JSON.stringify(config, null, 2)}\n`);
+if (args.share !== undefined) config.share = args.share ? { kind: 'folder', path: path.resolve(args.share) } : undefined;
+await saveConfig();
+log(config.share ? `started, sharing through ${config.share.path}` : 'started, not sharing');
 
-// this user's items: what their folder has from before, until the first scan
-const own = new OwnItems(folder, user);
-let mine: Item[] = await own.load();
+// this user's items, served to the other trays - what was there last time
+// until the first scan
+const itemsFile = path.join(host.params.userData, 'items.json');
+const store = await trayProtocol.createStore({
+  items: memory(JSON.parse(await fs.promises.readFile(itemsFile, 'utf8').catch(() => '{}')) as Items),
+});
+const mine = () => Object.values(store.state.items);
 
-// everyone else whose tray is running - what it says about itself, and their
-// items as their folder has them
-type Other = { user: string; info: TrayInfo; items: Item[] };
-let others = new Map<string, Other>();
-// a connection to each of them, by user: made once for each run of their
-// tray, and not tried again until it's run again. Only someone whose
-// connection is open is listed.
-type Link = { session: string; peer?: Peer; close?: () => void };
+// every other running tray, by device: connected to once a run of it, and not
+// tried again until it runs again. Listed only while it's connected and its
+// items have come.
+type Link = { user: string; session: string; tray?: Tray; items?: Items; close?: () => void };
 const links = new Map<string, Link>();
-const peerOf = (name: string) => links.get(name)?.peer;
-const running = () => [...others.values()]
-  .filter(other => peerOf(other.user))
-  .sort((a, b) => a.user.localeCompare(b.user));
+const connected = () => [...links.values()].filter(link => link.tray && link.items);
+// everyone listed, each with what all their trays have, once over
+const users = () => {
+  const byUser = new Map<string, Items>();
+  for (const link of connected()) byUser.set(link.user, { ...byUser.get(link.user), ...link.items });
+  return [...byUser].map(([name, items]) => ({ user: name, items: Object.values(items) }))
+    .sort((a, b) => a.user.localeCompare(b.user));
+};
+// a user's connected trays - the first is the one asked to do anything only
+// one should
+const traysOf = (name: string) => connected().filter(link => link.user === name).map(link => link.tray!);
+const itemOf = (name: string, url: string) => connected().find(link => link.user === name && link.items![url])?.items![url];
 
 // while something asked for from the menu is being done, the menu is off but
 // for Quit; refreshes on their own don't turn it off
@@ -137,11 +154,10 @@ const actionId = (action: Action) => JSON.stringify(action);
 
 const titled = (title: string) => title.length > TITLE_LENGTH ? `${title.slice(0, TITLE_LENGTH - 1)}…` : title;
 
-// the tray as a device on the data folder - only while gh is signed in as
-// this user, which is when the tray takes part at all. Its signaling lives in
-// the folder's .rtc, beside everyone's items.
+// the tray as a device on the share - only while gh is signed in as this
+// user, which is when the tray takes part at all
 let rtc: RtcHost<TrayInfo> | undefined;
-const signaling = folderSignaling(path.join(folder, '.rtc'));
+const signaling = config.share && folderSignaling(config.share.path);
 const session = crypto.randomUUID();
 
 // Check Now, with GitHub's rate limit beside it: what's left this hour of
@@ -159,7 +175,7 @@ function menu(): TrayMenuItem[] {
   const usable = !busy && !ghMissing;
   // nothing of anyone's shows until gh is signed in as this user
   const online = rtc !== undefined;
-  const peers = running();
+  const peers = users();
 
   // approving it - a deployment one environment at a time: this user's with
   // their own account, someone else's by having their tray do it with theirs
@@ -253,7 +269,9 @@ function menu(): TrayMenuItem[] {
           ],
         })),
       },
-      ...kinds(user, mine),
+    ] satisfies TrayMenuItem[] : []),
+    ...(signedIn ? [
+      ...kinds(user, mine()),
       { type: 'separator' },
     ] satisfies TrayMenuItem[] : []),
     // always there, whatever else is going on
@@ -264,20 +282,20 @@ function menu(): TrayMenuItem[] {
 const tray = await host.createTray({ icon: icons.syncing, tooltip: `Checking ${user}'s inbox…`, menu: menu() });
 const render = (changes: Partial<TrayParams> = {}) => tray.update({ ...changes, menu: menu() });
 
-// when this user's files last changed - the others re-read them when it does
-let lastUpdatedAt = new Date().toISOString();
-
-// signed in as this user: the tray joins the others - they see it, connect to
-// it to ask it things, and it connects to them
+// signed in as this user, with a share: the tray joins the others - they see
+// it, connect to it for its items and to ask it things, and it connects to
+// them for theirs
 function goOnline() {
-  if (rtc) return;
+  if (rtc || !signaling) return;
   rtc = createRtcHost<TrayInfo>(signaling, {
-    deviceId: user,
+    deviceId: config.deviceId,
     name: user,
-    info: { lastUpdatedAt, session },
+    info: { user, session },
     accept: channel => {
-      if (channel.label !== PEER_LABEL) return false;
-      serve(channel, {
+      // from a tray that says whose it is - this user's own others aside
+      const from = userOf(channel.label);
+      if (!from || from === user) return false;
+      serve(channel, from, store, {
         refresh: from => {
           log(`${from} asked for a refresh`);
           void refresh();
@@ -288,11 +306,11 @@ function goOnline() {
         approve: approveFor,
       });
     },
-    // someone coming, going, or changing their files
-    onDevices: () => void scanUsers().then(() => render()).catch(error => log(`couldn't look at the others: ${firstLine(error)}`)),
-    onError: reason => { if (reason) log(`sharing through ${folder}: ${reason}`); },
+    // someone coming or going
+    onDevices: follow,
+    onError: reason => { if (reason) log(`sharing through ${config.share!.path}: ${reason}`); },
   });
-  log(`sharing through ${folder}`);
+  log(`sharing through ${config.share!.path}`);
 }
 
 // not signed in (or leaving): every connection goes - theirs to this tray and
@@ -302,8 +320,7 @@ async function goOffline() {
   if (!rtc) return;
   const stopping = rtc;
   rtc = undefined;
-  for (const name of [...links.keys()]) unlink(name);
-  others = new Map();
+  for (const deviceId of [...links.keys()]) unlink(deviceId);
   await stopping.stop();
   log('stopped sharing');
 }
@@ -332,7 +349,7 @@ async function approvalRequested(from: string, item: SentItem) {
 // someone having this tray approve one of this user's items, with this
 // user's account - who it was for goes in the approval, and this user is told
 async function approveFor(from: string, url: string, environment?: number) {
-  const found = mine.find(each => each.url === url);
+  const found = store.state.items[url];
   if (!found) throw new Error(`that isn't waiting on ${user} any more`);
   let what: string;
   try {
@@ -363,62 +380,69 @@ const refresh = (broadcast = false) => refreshing(broadcast);
 
 // asks every other running tray to refresh
 function broadcastRefresh() {
-  for (const other of running()) void peerOf(other.user)?.request.refresh().catch(() => { });
+  for (const link of connected()) void link.tray!.request.refresh().catch(() => { });
 }
 
-// the others: who's running, and - for anyone whose files changed since last
-// time - what they have. One look at a time.
-let scanning: Promise<void> = Promise.resolve();
-const scanUsers = () => scanning = scanning.catch(() => { }).then(scanUsersOnce);
-async function scanUsersOnce() {
+// the connections follow who's online: anyone gone, or run again, is hung up
+// on - and anyone not connected to yet is. This user's own other trays have
+// the same items, so they're left be.
+function follow() {
   const devices = rtc?.devices ?? {};
-  const next = new Map<string, Other>();
-  await Promise.all(Object.entries(devices).map(async ([name, device]) => {
-    if (name === user || !device.online || !device.info?.session) return;
-    const before = others.get(name);
-    const same = before?.info.lastUpdatedAt === device.info.lastUpdatedAt;
-    next.set(name, { user: name, info: device.info, items: same ? before!.items : await readItems(folder, name) });
-  }));
-  others = next;
-  // the connections follow: anyone gone, or run again, is hung up on - and
-  // anyone not connected to yet is
-  for (const [name, { session: theirs }] of [...links]) {
-    if (others.get(name)?.info.session !== theirs) unlink(name);
+  for (const [deviceId, { session: theirs }] of [...links]) {
+    const device = devices[deviceId];
+    if (!device?.online || device.info?.session !== theirs) unlink(deviceId);
   }
-  await Promise.all([...others.values()].filter(other => !links.has(other.user)).map(link));
+  for (const [deviceId, device] of Object.entries(devices)) {
+    const info = device.info;
+    if (deviceId === config.deviceId || !device.online || !info?.user || !info.session || info.user === user) continue;
+    if (!links.has(deviceId)) void link(deviceId, info);
+  }
+  void render();
 }
 
-// connects to another tray, once a run of it: listed while it's open, and not
-// tried again if it fails or closes until it runs again
-async function link(other: Other) {
-  const entry: Link = { session: other.info.session };
-  links.set(other.user, entry);
+// connects to another tray, once a run of it, and follows its items: listed
+// while it's open, and not tried again if it fails or closes until it runs
+// again
+async function link(deviceId: string, info: TrayInfo) {
+  const entry: Link = { user: info.user, session: info.session };
+  links.set(deviceId, entry);
   if (!rtc) return;
   let connection: Awaited<ReturnType<typeof connect>>;
   try {
-    connection = await connect(rtc, other.user);
+    connection = await connect(rtc, deviceId, user);
   } catch (error) {
-    log(`couldn't connect to ${other.user}: ${firstLine(error)}`);
+    log(`couldn't connect to ${info.user}: ${firstLine(error)}`);
     return;
   }
   // hung up on, or gone offline, while it connected
-  if (links.get(other.user) !== entry || !rtc) return connection.close();
-  entry.peer = connection.peer;
+  if (links.get(deviceId) !== entry || !rtc) return connection.close();
+  entry.tray = connection.tray;
   entry.close = connection.close;
-  log(`connected to ${other.user}`);
   connection.onClose(() => {
-    if (entry.peer !== connection.peer) return;
-    entry.peer = undefined;
-    log(`${other.user} hung up`);
+    if (entry.tray !== connection.tray) return;
+    entry.tray = entry.items = undefined;
+    log(`${info.user} hung up`);
     void render();
   });
+  try {
+    // their items as they are, and every change to them after
+    await connection.tray.state.items.subscribe(items => {
+      if (entry.tray !== connection.tray) return;
+      entry.items = items;
+      void render();
+    });
+  } catch (error) {
+    log(`couldn't follow ${info.user}'s items: ${firstLine(error)}`);
+    return connection.close();
+  }
+  log(`connected to ${info.user}`);
 }
 
-function unlink(name: string) {
-  const entry = links.get(name);
-  links.delete(name);
+function unlink(deviceId: string) {
+  const entry = links.get(deviceId);
+  links.delete(deviceId);
   if (!entry) return;
-  entry.peer = undefined;
+  entry.tray = entry.items = undefined;
   entry.close?.();
 }
 
@@ -433,23 +457,23 @@ async function signInState(): Promise<{ ghToken: string } | { status: Partial<Tr
   return { ghToken };
 }
 
-// this user's inbox, written to their folder - the others told if that
-// changed anything
+// this user's inbox, served to the others - who hear of each change as it's
+// made - and kept for next time
 async function scanOwn(ghToken: string): Promise<{ status: Partial<TrayParams> }> {
   const scanned = await inbox.scan(ghToken, config.autoMarkDone);
   if (scanned.markedDone > 0) log(`marked ${scanned.markedDone} finished notification(s) done`);
   if (scanned.markDoneError) log(`couldn't mark some notifications done: ${scanned.markDoneError}`);
   if (scanned.searchError) log(`couldn't search for review requests: ${scanned.searchError}`);
   pollSeconds = scanned.pollSeconds;
-  mine = scanned.items;
-  if (await own.write(mine)) {
-    lastUpdatedAt = new Date().toISOString();
-    rtc?.update({ info: { lastUpdatedAt, session } });
+  const items = byUrl(scanned.items);
+  if (JSON.stringify(items) !== JSON.stringify(store.state.items)) {
+    await store.set({ items });
+    await writeAtomic(itemsFile, `${JSON.stringify(items, null, 2)}\n`);
   }
 
   // the icon is for what this user can approve; the rest is only told
-  const othersOnly = mine.filter(item => item.kind === 'pull-request' && item.othersOnly).length;
-  const waiting = mine.length - othersOnly;
+  const othersOnly = scanned.items.filter(item => item.kind === 'pull-request' && item.othersOnly).length;
+  const waiting = scanned.items.length - othersOnly;
   const more = othersOnly > 0 ? `, ${othersOnly} needing someone else` : '';
   return {
     status: waiting > 0
@@ -458,7 +482,7 @@ async function scanOwn(ghToken: string): Promise<{ status: Partial<TrayParams> }
   };
 }
 
-// looks at everyone's folders and this user's inbox. Asked for by Check Now
+// looks at this user's inbox. Asked for by Check Now
 // (here or anywhere), it asks every other tray to as well. Says how long to
 // leave it before the next poll.
 async function refreshOnce(broadcast: boolean): Promise<number> {
@@ -483,9 +507,13 @@ async function refreshOnce(broadcast: boolean): Promise<number> {
     return DEFAULT_POLL_SECONDS;
   }
 
-  const [users, scanned] = await Promise.allSettled([scanUsers(), scanOwn(state.ghToken)]);
-  const failed = [users, scanned].find(result => result.status === 'rejected');
-  const reason = failed && firstLine(failed.reason);
+  let status: Partial<TrayParams> = {};
+  let reason: string | undefined;
+  try {
+    ({ status } = await scanOwn(state.ghToken));
+  } catch (error) {
+    reason = firstLine(error);
+  }
   if (reason) log(`refresh failed: ${reason}`);
   // what it cost - logged when that's news: anything costing quota, or a
   // different number of requests than last time - and kept in config.json
@@ -499,11 +527,11 @@ async function refreshOnce(broadcast: boolean): Promise<number> {
     await saveConfig().catch(error => log(`couldn't save the settings: ${firstLine(error)}`));
   await render({
     icon: icons.clear,
-    ...(scanned.status === 'fulfilled' ? scanned.value.status : {}),
+    ...status,
     ...(reason ? { tooltip: `Couldn't check: ${reason}` } : {}),
   });
-  // the others hear of this user's files changing through what the tray
-  // advertises; only Check Now has them all look at GitHub again too
+  // the others hear of this user's items changing as they do; only Check Now
+  // has them all look at GitHub again too
   if (broadcast) broadcastRefresh();
   await github.save().catch(error => log(`couldn't save the cache: ${firstLine(error)}`));
   return pollSeconds;
@@ -614,25 +642,26 @@ tray.onEvent(event => {
     case 'view':
       return void host.shell.openExternal(action.url);
     case 'approve': {
-      const found = mine.find(each => each.url === action.url);
+      const found = store.state.items[action.url];
       if (!found) return;
       return void operation(() => approveOwn(found, action.environment));
     }
     case 'ask-refresh': {
-      const peer = peerOf(action.to);
-      if (!peer) return;
-      return void peer.request.refresh().then(
+      const trays = traysOf(action.to);
+      if (!trays.length) return;
+      return void Promise.all(trays.map(tray => tray.request.refresh())).then(
         () => log(`asked ${action.to} to refresh`),
         error => render({ tooltip: `Couldn't reach ${action.to}: ${firstLine(error)}` }),
       );
     }
     case 'ask-approval': {
-      const found = others.get(action.to)?.items.find(each => each.url === action.url);
-      const peer = peerOf(action.to);
-      if (!found || !peer) return;
+      // every one of their trays tells them - whichever machine they're at
+      const found = itemOf(action.to, action.url);
+      const trays = traysOf(action.to);
+      if (!found || !trays.length) return;
       // what goes to the other tray is just what it is and where
       const { kind, title, url } = found;
-      return void peer.request.requestApproval({ item: { kind, title, url } }).then(
+      return void Promise.any(trays.map(tray => tray.request.requestApproval({ item: { kind, title, url } }))).then(
         () => log(`asked ${action.to} to approve ${kind}: ${title}`),
         async error => {
           log(`couldn't ask ${action.to} to approve ${title}: ${firstLine(error)}`);
@@ -641,8 +670,9 @@ tray.onEvent(event => {
       );
     }
     case 'approve-as': {
-      const found = others.get(action.to)?.items.find(each => each.url === action.url);
-      const peer = peerOf(action.to);
+      // just one of their trays - approving is done once
+      const found = itemOf(action.to, action.url);
+      const [peer] = traysOf(action.to);
       if (!found || !peer) return;
       const what = `#${found.number} ${found.title} (${found.repo})`;
       return void operation(async () => {

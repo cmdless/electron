@@ -1,5 +1,5 @@
 import type { Answer, GitHub } from './github.js';
-import type { DeploymentItem, Environment, Item, PullRequestItem } from './files.js';
+import type { DeploymentItem, Environment, Item, PullRequestItem } from './items.js';
 
 // how long to wait between polls when GitHub doesn't say
 export const DEFAULT_POLL_SECONDS = 60;
