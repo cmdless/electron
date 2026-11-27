@@ -6,7 +6,7 @@ import { defineConfig } from 'electron-vite';
 const mainDir = resolve(import.meta.dirname, 'src/main');
 const mainEntries = Object.fromEntries(
   readdirSync(mainDir)
-    .filter(file => file.endsWith('.ts'))
+    .filter(file => file.endsWith('.ts') && !file.endsWith('.test.ts'))
     .map(file => [file.replace(/\.ts$/, ''), resolve(mainDir, file)])
 );
 
