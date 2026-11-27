@@ -8,6 +8,7 @@ import { Command } from 'commander';
 import { ensureElectron, getDefaultCmdlessRoot } from '@cmdless/ensure-electron';
 import { getCmdlessApp, isEphemeralCmdlessApp } from '@cmdless/ui-sdk/node';
 import { appExecutable } from './platform.js';
+import { ensureLauncher, forward, launchRoot, logLaunch } from './launch.js';
 import pkg from "../../package.json" with { type: "json" };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +53,42 @@ program
       : stockExecPath;
     const child = spawn(execPath, [hostEntry], { stdio: 'inherit' });
     child.once('exit', code => { process.exitCode = code ?? 1; });
+  });
+
+// .cmdless files: install sets up the shim that opens them through this
+// bin; add and open make sure it's there, then pass a file on to
+// @cmdless/launch-tray
+const launch = program.command('launch').description('Open .cmdless files through @cmdless/launch-tray');
+
+launch
+  .command('install').description('Set up opening .cmdless files on this machine, through this runtime')
+  .action(async () => {
+    const changed = await ensureLauncher(pkg.version);
+    console.log(changed ? `set up in ${launchRoot()}` : `already set up in ${launchRoot()}`);
+  });
+
+launch
+  .command('add').description('Add a .cmdless file to @cmdless/launch-tray')
+  .argument('<file>', 'The .cmdless file')
+  .action(async (file: string) => {
+    await ensureLauncher(pkg.version);
+    await forward('add', file);
+  });
+
+// run by the shim, with nowhere to show output - what happens goes to the
+// launcher's log
+launch
+  .command('open').description('Open a .cmdless file through @cmdless/launch-tray - what the shim runs')
+  .argument('<file>', 'The .cmdless file')
+  .action(async (file: string) => {
+    try {
+      await ensureLauncher(pkg.version);
+      await forward('open', file);
+      logLaunch(`open ${file}`);
+    } catch (error) {
+      logLaunch(`open ${file} failed: ${(error as Error).message}`);
+      process.exitCode = 1;
+    }
   });
 
 await program.parseAsync();

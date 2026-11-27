@@ -7,6 +7,15 @@ Normally you don't run this directly: `UIHost` in [`@cmdless/ui-sdk/node`](../..
 ## Command
 
 - `host` — run the host for an app. It takes no arguments: the app's name comes from `CMDLESS_APP` (left out, a throwaway one is made), the cmdless root from `CMDLESS_ROOT`, and where to report its address from `CMDLESS_SERVICE_SOCKET` (set by `waitForService`).
+- `launch install` — set up opening `.cmdless` files on this machine through this runtime (see [The launcher](#the-launcher)). Run through `npx @cmdless/ui launch install`, so it's the cached copy that's set up.
+- `launch add <file>` and `launch open <file>` — make sure that's set up, then pass the file on to `@cmdless/launch-tray`: the newest version already cached, and the latest from npm only when there's none. Nothing updates what's cached. `open` is what a double-click runs, so it has nowhere to print: what it did goes to `launch.log`.
+
+## The launcher
+
+`.cmdless` files open through this runtime's own bin, by way of a shim set up once per machine in `<root>/launch/`. `launcher.json` records what the shim runs — node (`process.execPath`), the bin, the version, and `CMDLESS_ROOT` if one was set — and `install`, `add` and `open` each set it up again, under a lock, whenever any of that differs. One set up from a monorepo checkout runs the checkout's build; installed through `npx @cmdless/ui`, it runs the copy in the root's package cache, which nothing clears.
+
+- **macOS:** `cmdless launch.app`, an AppleScript droplet (`LSUIElement`, so no Dock icon) that declares the `.cmdless` type (`dev.cmdless.launch-file`, JSON) and is registered with Launch Services as what opens it. Finder hands an opened file to an app as an Apple Event, which a droplet's `on open` gets; it hands each file to `launcher`, a shell script, in the background, and quits. The script puts node's folder on `PATH` (whatever Finder starts gets the system's, where npm isn't), sets `CMDLESS_ROOT` if the root was moved, and runs `launch open`. macOS counts everything the droplet starts as *cmdless launch*: reading Documents, Desktop or Downloads asks for that app's permission — which is why the runtime it runs should live in the cache under `~/.cmdless`, not a checkout in Documents.
+- Windows and Linux aren't set up yet.
 
 ## How it hosts
 
