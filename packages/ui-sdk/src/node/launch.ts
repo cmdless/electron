@@ -1,7 +1,7 @@
 import { connectOrStart, getTmpSocketPath, resolveNewestPackageBin } from '@cmdless/core/node';
 import { connectSocket } from '@cmdless/rpc-sdk/node';
 import { launchProtocol } from '../launch.js';
-import type { Launch } from '../launch.js';
+import type { Launch, OpenOptions } from '../launch.js';
 
 // one launch tray per user: its socket is both its lock and where clients
 // connect - and only processes running as this user can reach it
@@ -24,8 +24,6 @@ async function connectLaunch(address = getLaunchSocketPath()) {
 
 export type LaunchHostOptions = { cmdlessRoot?: string };
 
-// whether to show it before keeping it (LaunchParams' confirm)
-export type LaunchOptions = { confirm?: boolean };
 
 // A connection to @cmdless/launch-tray - the running one, or one started for
 // it: the newest version already cached, or the latest from npm when there's
@@ -38,16 +36,16 @@ export class LaunchHost {
     return new LaunchHost(await connectOrStart(connectLaunch, binPath));
   }
 
-  // keeps a launch, asking first unless it's kept just so already - or
-  // without asking, with confirm false
-  add(launch: Launch, { confirm }: LaunchOptions = {}) {
-    return this.client.request.add({ launch, confirm });
+  // keeps a launch, under Launch in the tray
+  add(launch: Launch) {
+    return this.client.request.add({ launch });
   }
 
-  // runs a launch, asking about it and keeping it first unless it's kept
-  // just so already (or confirm is false) - settling once it's running
-  open(launch: Launch, { confirm }: LaunchOptions = {}) {
-    return this.client.request.open({ launch, confirm });
+  // runs a launch - its commands, or the ones named (asked, if it has
+  // several and none's named), keeping it too with keep - settling once
+  // it's running
+  open(launch: Launch, options: OpenOptions = {}) {
+    return this.client.request.open({ launch, ...options });
   }
 
   dispose() {
@@ -55,17 +53,17 @@ export class LaunchHost {
   }
 
   // the one-shots: connect, ask, leave
-  static async add(launch: Launch, options: LaunchHostOptions & LaunchOptions = {}) {
+  static async add(launch: Launch, options: LaunchHostOptions = {}) {
     const host = await LaunchHost.create(options);
     try {
-      return await host.add(launch, options);
+      return await host.add(launch);
     } finally {
       host.dispose();
     }
   }
 
-  static async open(launch: Launch, options: LaunchHostOptions & LaunchOptions = {}) {
-    const host = await LaunchHost.create(options);
+  static async open(launch: Launch, { cmdlessRoot, ...options }: LaunchHostOptions & OpenOptions = {}) {
+    const host = await LaunchHost.create({ cmdlessRoot });
     try {
       return await host.open(launch, options);
     } finally {

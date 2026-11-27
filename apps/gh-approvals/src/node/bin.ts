@@ -27,7 +27,6 @@ import { coalesce, firstLine, writeAtomic } from './util.js';
 import { logViewer } from './logViewer.js';
 import { approvalsWindow } from './approvalsWindow.js';
 import { repoSpec, shortcut } from './shortcuts.js';
-import type { ShortcutSource } from './shortcuts.js';
 import { approvalsProtocol } from '../shared/protocols.js';
 import type { Devices } from '../shared/protocols.js';
 
@@ -382,12 +381,7 @@ function menu(): TrayMenuItem[] {
           { id: 'notifications', label: 'GitHub Notifications...' },
           { id: 'approvals', label: 'Approval UI...' },
           { id: 'log-viewer', label: 'Log Viewer...' },
-          {
-            type: 'submenu', label: 'Add Shortcut', submenu: [
-              { id: 'shortcut:npm', label: 'npm' },
-              { id: 'shortcut:gx', label: 'GitHub (gx)' },
-            ],
-          },
+          { id: 'add-shortcut', label: 'Add Shortcut' },
           { type: 'separator' },
           { type: 'checkbox', id: 'auto-mark-done', label: 'Automatically Mark as Done', checked: config.autoMarkDone },
           // the provider's account, while it's signed in
@@ -831,17 +825,16 @@ function single(what: string, open: () => Promise<RemoteWindow>) {
 const showLog = single('the log', () => host.open(logViewer, { file: logFile(host.params.userData), title: `${appName} log` }));
 // everyone's items
 const showApprovals = single('approvals', () => host.open(approvalsWindow, { store: devices, title: appName }));
-// a shortcut to this tray, with its team settings, kept in the launch tray -
-// at once, since choosing it from the menu was the asking; the launch tray
-// says it's been added
-async function addShortcut(source: ShortcutSource) {
-  const launch = shortcut({
-    appName, packageName: pkg.name, repo: repoSpec(pkg.repository) ?? pkg.name, provider: config.provider, orgs,
-  }, source);
+// the shortcut to this tray, with its team settings, kept in the launch tray
+// - choosing it from the menu was the asking
+async function addShortcut() {
+  const launch = shortcut({ appName, packageName: pkg.name, repo: repoSpec(pkg.repository), provider: config.provider, orgs });
   try {
-    log(`shortcut ${launch.name}: ${await LaunchHost.add(launch, { confirm: false })}`);
+    const result = await LaunchHost.add(launch);
+    log(`shortcut: ${result}`);
+    if (result !== 'unchanged') await host.showNotification({ title: `${appName} shortcut ${result}`, body: 'It\'s under Launch in cmdless launch.' });
   } catch (error) {
-    log(`couldn't add shortcut ${launch.name}: ${firstLine(error)}`);
+    log(`couldn't add the shortcut: ${firstLine(error)}`);
   }
 }
 
@@ -860,7 +853,7 @@ tray.onEvent(event => {
   if (item === 'auto-mark-done') return void toggleAutoMarkDone();
   if (item === 'log-viewer') return void showLog();
   if (item === 'approvals') return void showApprovals();
-  if (item === 'shortcut:npm' || item === 'shortcut:gx') return void addShortcut(item.slice('shortcut:'.length) as ShortcutSource);
+  if (item === 'add-shortcut') return void addShortcut();
   if (item === 'provider-login') return void providerLogin();
   if (item === 'provider-logout') return void operation(providerLogout);
   if (item === 'login-as') return void loginAs();
