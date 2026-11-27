@@ -237,6 +237,33 @@ export async function listenExclusive(server: net.Server, socketPath: string): P
   return true;
 }
 
+// A lock across processes, by name: held while this process listens on its
+// socket (listenExclusive). Whoever's waiting connects to the holder and
+// tries again once that connection closes - when the holder lets go, or
+// dies. Resolves with what lets it go.
+export async function acquireLock(name: string) {
+  const socketPath = getTmpSocketPath(name);
+  for (; ;) {
+    const waiting = new Set<net.Socket>();
+    const server = net.createServer(socket => {
+      waiting.add(socket);
+      socket.on('close', () => waiting.delete(socket));
+      socket.on('error', () => { });
+    });
+    if (await listenExclusive(server, socketPath)) {
+      return () => new Promise<void>(resolve => {
+        server.close(() => resolve());
+        for (const socket of waiting) socket.destroy();
+      });
+    }
+    await new Promise<void>(resolve => {
+      const holder = net.createConnection(socketPath);
+      holder.on('close', () => resolve());
+      holder.on('error', () => { });
+    });
+  }
+}
+
 // whether connecting failed because no daemon is there to answer - no
 // socket, or a stale one nothing listens on
 export function nothingAnswers(error: unknown) {

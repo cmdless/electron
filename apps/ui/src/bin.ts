@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import { readFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { Argument, Command } from 'commander';
 import { types } from '@cmdless/ui-sdk';
 import type { ElicitationRequest, PermissionRequest } from '@cmdless/ui-sdk';
-import { runAsPackage, UIHost } from '@cmdless/ui-sdk/node';
+import { resolveRuntimeBin, runAsPackage, UIHost } from '@cmdless/ui-sdk/node';
 import type { CreateHostOptions, WindowParams } from '@cmdless/ui-sdk/node';
 
 // how a one-shot command prints the value it ended with
@@ -150,6 +151,24 @@ program
   .passThroughOptions()
   .action(async (specifier: string, args: string[]) => {
     process.stdout.write(await runAsPackage({ specifier }, args));
+  });
+
+// ui-runtime's own launch commands - install, add <file>, open <file> - run
+// by the runtime this package speaks to, from its cache: what's set up then
+// runs that copy, whatever happens to this one
+program
+  .command('launch').description('Open .cmdless files: install, add <file> or open <file>, through ui-runtime')
+  .argument('[args...]', 'install, add <file> or open <file>')
+  .helpOption(false)
+  .allowUnknownOption()
+  .passThroughOptions()
+  .action(async (args: string[]) => {
+    const { binPath, env } = await resolveRuntimeBin();
+    const child = spawn(process.execPath, [binPath, 'launch', ...args], { env, stdio: 'inherit' });
+    process.exitCode = await new Promise<number>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', code => resolve(code ?? 1));
+    });
   });
 
 await program.parseAsync();

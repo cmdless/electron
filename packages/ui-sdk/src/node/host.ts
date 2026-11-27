@@ -5,8 +5,8 @@ import type { RpcProtocol } from '@cmdless/rpc-sdk';
 import { connectSocket } from '@cmdless/rpc-sdk/node';
 import { createWebSocket } from '@cmdless/rpc-sdk/ws';
 import { closeWebSocketServer, getWebSocketUrl, waitForWebSocketListening } from '@cmdless/rpc-sdk/ws/node';
-import { resolvePackageBin, waitForService } from '@cmdless/core/node';
-import { getCmdlessUIVersion, setCmdlessApp } from './utils.js';
+import { waitForService } from '@cmdless/core/node';
+import { getCmdlessUIVersion, resolveRuntimeBin, setCmdlessApp } from './utils.js';
 import { elicitationCard, elicitationResult, permissionCard, permissionResult } from '../prompts.js';
 import type { ElicitationRequest, PermissionRequest } from '../prompts.js';
 import type { CardEvent, CardView, FormView, MessageBoxType, ShowType } from '../types.js';
@@ -511,7 +511,7 @@ export class UIHost implements UIOpener {
   // (CMDLESS_SERVICE_SOCKET).
   static async create({ app, cmdlessRoot, timeoutMs, initialize }: CreateHostOptions = {}) {
     const sdkVersion = await getCmdlessUIVersion();
-    const { binPath, env } = await resolvePackageBin(import.meta, '@cmdless/ui-runtime', sdkVersion, cmdlessRoot);
+    const { binPath, env } = await resolveRuntimeBin(cmdlessRoot);
     if (app) setCmdlessApp(app, env);
     const { value } = await waitForService<HostService>(process.execPath, [binPath, 'host'], { env, timeoutMs });
 
