@@ -11,11 +11,15 @@ gh-approvals set provider none | <provider>...
 
 Run with nothing, it's the tray. Its settings are kept in `config.json` for every run after, each set once with `set` — which is refused while the tray runs, since it would be written over:
 
-- `set user` — the GitHub account it runs for. It won't start until it's set. [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
+- `set user` — the GitHub account it runs for. It can be chosen from the tray instead (below). [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
 - `set org` — only what's in these owners' repositories: `add` or `remove` one, or `clear` them all. With none, everything.
 - `set provider` — what the trays find each other through: `folder <path>`, `graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items.
 
-To set it up and start: `gh-approvals set user <login> && gh-approvals set provider folder ~/OneDrive/team && gh-approvals`.
+To set it up and start: `gh-approvals set provider folder ~/OneDrive/team && gh-approvals`.
+
+## The account
+
+With no account chosen, or one gh isn't signed in to, the menu starts with **Login to GitHub ›**; once it's signed in, **Logged in as {user} ›**. Both start with **Switch Account ›**: every account gh is signed in to, the chosen one included (greyed out once it's signed in), then **Login As…**, which asks for any login. Choosing an account signs in as it the way gh does — a one-time code to enter on GitHub — unless gh is signed in as it already. Choosing someone else restarts the tray as them, since everything it does is that user's: the new run waits for this one to go, then signs in.
 
 For a team through Microsoft Graph, the App folder is one everyone can reach — a SharePoint site's (`site <site id>`) or a document library's (`drive <drive id>`) — not `personal`, which is each user's own.
 
@@ -25,7 +29,7 @@ The inbox (`notifications?all=true&is_done=false`) says what there is to look at
 
 Review requests that never reached the inbox — made before you read it this way, or with notifications going elsewhere — come from a search (`is:pr is:open review-requested:@me`, in the `--org` owners if given). The search has a rate limit of its own and may not be free while nothing changes, so it runs only at start and on **Check Now**. What it finds is then looked at every refresh, like anything else waiting, until it isn't.
 
-Every request is conditional on what GitHub answered last, kept in `github-cache.json` in userData, so an unchanged answer (304) costs nothing against the rate limit. It polls as often as the inbox asks (`X-Poll-Interval`, usually a minute). **Check Now** shows what's left of the rate limit this hour and what the last refresh cost: `Check Now (4,980 / 5,000, last 1 (16))` is 4,980 of 5,000 left, and 1 of the last refresh's 16 requests counted.
+Every request is conditional on what GitHub answered last, kept in the user's own `github-cache.json` in userData, so an unchanged answer (304) costs nothing against the rate limit. It polls as often as the inbox asks (`X-Poll-Interval`, usually a minute). **Check Now** shows what's left of the rate limit this hour (the core one — search's own, per minute, isn't it) and what the last refresh cost: `Check Now (4,980 / 5,000, last 1 (16))` is 4,980 of 5,000 left, and 1 of the last refresh's 16 requests counted.
 
 **Automatically Mark as Done** (off by default) marks a merged pull request's notification done, and a repository's approval requests once nothing there is waiting on you.
 
@@ -55,5 +59,5 @@ A deployment is approved one environment at a time. A pull request marked `*` wa
 ## Elsewhere in userData
 
 - `config.json` — this machine's device id, the account and owners, the provider, Automatically Mark as Done, and the last refresh's cost and rate limit.
-- `items.json` — your items as of the last refresh, served until the next one.
+- `users/<login>/` — what's kept for each account it's run as, so switching back finds it where it was: `items.json`, your items as of the last refresh, served until the next one, and `github-cache.json`, GitHub's last answers.
 - `log.txt` — what it did; **Log Viewer…** tails it in a window.

@@ -3,6 +3,11 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 
+// a GitHub login: letters, digits and single hyphens, none at either end, up
+// to 39 - which also makes it safe as a folder's name
+export const GITHUB_LOGIN = '^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$';
+export const isGitHubLogin = (login: string) => new RegExp(GITHUB_LOGIN).test(login);
+
 // how long gh gets to come up with a one-time code
 const CODE_TIMEOUT_MS = 20_000;
 
@@ -24,6 +29,24 @@ export async function tokenFor(user: string): Promise<string | undefined> {
     return stdout.trim() || undefined;
   } catch {
     return undefined;
+  }
+}
+
+// every github.com account gh is signed in to, by login - none, if gh isn't
+// there or isn't signed in to any. gh exits 1 when any account has a problem,
+// still printing them all, so its output's read either way.
+export async function ghAccounts(): Promise<string[]> {
+  let stdout: string;
+  try {
+    ({ stdout } = await run('gh', ['auth', 'status', '--hostname', 'github.com', '--json', 'hosts']));
+  } catch (error) {
+    stdout = (error as { stdout?: string }).stdout ?? '';
+  }
+  try {
+    const { hosts } = JSON.parse(stdout) as { hosts?: Record<string, { login?: string }[]> };
+    return [...new Set((hosts?.['github.com'] ?? []).map(account => account.login).filter((login): login is string => !!login))];
+  } catch {
+    return [];
   }
 }
 

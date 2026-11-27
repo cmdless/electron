@@ -31,8 +31,10 @@ export class GitHub {
   // as of the latest answer that said
   rateLimit?: RateLimit;
 
-  // every answer says where the rate limit stands, 304s included
+  // every answer says where its rate limit stands, 304s included - only the
+  // core one is kept: search has its own, per minute
   private noteRateLimit(response: Response) {
+    if (response.headers.get('x-ratelimit-resource') !== 'core') return;
     const remaining = Number(response.headers.get('x-ratelimit-remaining'));
     const limit = Number(response.headers.get('x-ratelimit-limit'));
     const reset = Number(response.headers.get('x-ratelimit-reset'));
