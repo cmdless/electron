@@ -21,9 +21,27 @@ export function setCmdlessRoot(root: string, env: NodeJS.ProcessEnv = process.en
   else delete env[ROOT_KEY];
 }
 
+// An app's name has a package name's shape - an optional @scope/, then the
+// name - in lowercase letters, digits and . _ ~ - (never first): one folder
+// wherever it's joined (two, scoped), never . or .., and the same folder
+// whatever a file system's case rules. It names locks and folders, so
+// anything else is refused rather than cleaned up.
+const APP_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/;
+
+export function isCmdlessAppName(name: string) {
+  return name.length <= 214 && APP_NAME.test(name);
+}
+
+// the name, if it is one - throws saying what one is otherwise
+export function validCmdlessAppName(name: string) {
+  if (!isCmdlessAppName(name))
+    throw new Error(`${JSON.stringify(name)} isn't an app name: [@scope/]name, in lowercase letters, digits and . _ ~ -`);
+  return name;
+}
+
 // one app's own folder under the root, e.g. <root>/apps/hangar
 export function getAppDataPath(app: string) {
-  return path.join(getCmdlessRoot(), 'apps', app);
+  return path.join(getCmdlessRoot(), 'apps', validCmdlessAppName(app));
 }
 
 // Unix socket paths are capped (104 bytes on macOS, 108 on Linux), and

@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { getMetaPackageVersion } from '@cmdless/core/node';
+import { getMetaPackageVersion, validCmdlessAppName } from '@cmdless/core/node';
 
 const APP_KEY = 'CMDLESS_APP';
 const URL_KEY = 'CMDLESS_URL';
@@ -20,13 +20,20 @@ function setEnv(key: string, value: string, env: NodeJS.ProcessEnv) {
   else delete env[key];
 }
 
+// an app name as it's given: none, a throwaway one this package made, or an
+// app's name (validCmdlessAppName) - anything else throws, since it names
+// userData, the app's bundles and its single-instance lock
+function checked(app: string) {
+  return app === '' || isEphemeralCmdlessApp(app) ? app : validCmdlessAppName(app);
+}
+
 // the app name, which groups processes under one userData
 export function getCmdlessApp() {
-  return process.env[APP_KEY] ?? '';
+  return checked(process.env[APP_KEY] ?? '');
 }
 
 export function setCmdlessApp(app: string, env: NodeJS.ProcessEnv = process.env) {
-  setEnv(APP_KEY, app, env);
+  setEnv(APP_KEY, checked(app), env);
   return app;
 }
 
@@ -40,11 +47,14 @@ export function getCmdlessUIVersion() {
   return getMetaPackageVersion('@cmdless/ui-sdk', import.meta);
 }
 
-export function isEphemeralCmdlessApp(appName: string) {
-  return appName.startsWith(getEphemeralPrefix());
-}
-
 const EPHEMERAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// a throwaway app's name: the prefix, then the id it was made with - and
+// nothing else
+export function isEphemeralCmdlessApp(appName: string) {
+  const prefix = getEphemeralPrefix();
+  return appName.startsWith(prefix) && EPHEMERAL_ID.test(appName.slice(prefix.length));
+}
 
 // whether a directory is an ephemeral app's userData: one named as an
 // ephemeral app is, directly inside the ephemeral prefix's folder - wherever
