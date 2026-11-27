@@ -8,7 +8,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { acquireLock, getCmdlessRoot, resolveNewestPackageBin } from '@cmdless/ui-sdk/node';
+import { installLinux, linuxInstalled } from './launch-linux.js';
 import { installMacOS, macOSInstalled } from './launch-macos.js';
+import { installWindows, windowsInstalled } from './launch-windows.js';
 
 // what the shim runs, the root it runs with when one was set
 // (CMDLESS_ROOT), and the shape of the shim itself - a newer shape is set up
@@ -34,6 +36,9 @@ function recorded(): Launcher | undefined {
 function platformInstall() {
   switch (process.platform) {
     case 'darwin': return { install: installMacOS, installed: macOSInstalled };
+    // drafts, not yet tested on their platforms
+    case 'win32': return { install: installWindows, installed: windowsInstalled };
+    case 'linux': return { install: installLinux, installed: linuxInstalled };
     default: throw new Error(`the launcher isn't set up on ${process.platform} yet`);
   }
 }

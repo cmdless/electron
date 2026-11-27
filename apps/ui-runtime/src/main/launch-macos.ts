@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { Launcher } from './launch.js';
+import { scriptPath, writeScript } from './launch-script.js';
 
 export const BUNDLE_ID = 'dev.cmdless.launch';
 export const FILE_TYPE = 'dev.cmdless.launch-file';
@@ -19,28 +20,10 @@ const APP_NAME = 'cmdless launch';
 const LSREGISTER = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
 
 const appPath = (root: string) => path.join(root, `${APP_NAME}.app`);
-const scriptPath = (root: string) => path.join(root, 'launcher');
 
 export const macOSInstalled = (root: string) => fs.existsSync(appPath(root)) && fs.existsSync(scriptPath(root));
 
-const shQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
 const appleScriptString = (value: string) => `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
-
-// the script: node's own folder first on PATH, since whatever opens a file
-// from Finder runs with the system's PATH, where npm isn't - and the root it
-// was set up with, if that was moved
-function writeScript(root: string, { node, bin, root: cmdlessRoot }: Launcher) {
-  const script = scriptPath(root);
-  fs.writeFileSync(script, [
-    '#!/bin/sh',
-    `PATH=${shQuote(path.dirname(node))}:"$PATH"`,
-    'export PATH',
-    ...cmdlessRoot ? [`CMDLESS_ROOT=${shQuote(cmdlessRoot)}`, 'export CMDLESS_ROOT'] : [],
-    `exec ${shQuote(node)} ${shQuote(bin)} launch open "$@"`,
-    '',
-  ].join('\n'));
-  fs.chmodSync(script, 0o755);
-}
 
 // the droplet: each file it's given goes to the script, in the background,
 // so the droplet quits at once
