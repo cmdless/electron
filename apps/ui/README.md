@@ -20,6 +20,8 @@ npx @cmdless/ui permission samples/permission.json
 
 Both take `--app <name>` to show it on that app's host (joined if it's already running), plus `--root` and `--timeout`. Without `--app`, each runs on a throwaway host of its own.
 
+`launch install`, `launch add <file>` and `launch open <file>` run [ui-runtime's launcher commands](../ui-runtime#the-launcher) with the runtime this package speaks to, from the cmdless root's cache: `npx @cmdless/ui launch install` sets up opening `.cmdless` files on this machine.
+
 `package <specifier> [args...]` caches and runs a different package's bin instead, passing the rest of the arguments on:
 
 ```
