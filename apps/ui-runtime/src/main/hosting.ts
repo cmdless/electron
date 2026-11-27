@@ -485,17 +485,22 @@ function trayImage(icon: string) {
 export type HostInfo = Omit<InitializeResult, 'hasSingleInstanceLock' | 'sdkVersion' | 'connectionId'>;
 
 // the host: where it listens, and every UIHost connected to it. The first to
-// connect is its owner - nothing else is told the address until it has.
+// connect is its owner - nothing else is told the address until it has, and
+// has set itself up.
 export class Host {
   readonly servers = new Map<string, ServerHandle>();
-  // settles once the owner has connected, and once it has gone
+  // settles once the owner has connected (initialized), once it has set
+  // itself up too (ready) - what anything else waits on to join - and once
+  // it has gone, set up or not
+  readonly connected: Promise<ServerHandle>;
   readonly owned: Promise<ServerHandle>;
   readonly ownerClosed: Promise<void>;
   private readonly handlesListeners = new Set<(count: number) => void>();
 
-  private constructor(readonly service: HostService, owned: Promise<ServerHandle>) {
+  private constructor(readonly service: HostService, connected: Promise<ServerHandle>, owned: Promise<ServerHandle>) {
+    this.connected = connected;
     this.owned = owned;
-    this.ownerClosed = owned.then(owner => new Promise<void>(resolve => owner.server.onClose(resolve)));
+    this.ownerClosed = connected.then(owner => new Promise<void>(resolve => owner.server.onClose(resolve)));
   }
 
   // how many windows and dialogs are open, across every UIHost - what the
@@ -538,11 +543,13 @@ export class Host {
   static async start(info: HostInfo, ready: Promise<void>) {
     const sdkVersion = await getCmdlessUIVersion();
     let ownerConnected!: (owner: ServerHandle) => void;
-    const owned = new Promise<ServerHandle>(resolve => ownerConnected = resolve);
+    const connected = new Promise<ServerHandle>(resolve => ownerConnected = resolve);
+    let ownerReady!: (owner: ServerHandle) => void;
+    const owned = new Promise<ServerHandle>(resolve => ownerReady = resolve);
     let hasOwner = false;
 
     const address = getTmpSocketPath(`cmdless-ui-host-${crypto.randomUUID()}`);
-    const host = new Host({ address }, owned);
+    const host = new Host({ address }, connected, owned);
 
     const { accept } = await UIHost.protocol.defineHost({
       configure: server => {
@@ -631,6 +638,12 @@ export class Host {
           const found = initialized().handles.get(id);
           if (!found) throw new Error(`no handle ${id}`);
           found.dispose(value);
+        });
+
+        // the owner has set itself up: only now can anything else join
+        server.onRequest.ready(() => {
+          const current = initialized();
+          if (current.isOwner) ownerReady(current);
         });
 
         server.onRequest.connections(() => {
