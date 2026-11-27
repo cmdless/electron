@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { getAppDataPath, getCmdlessRoot, getTmpSocketPath, listenExclusive, listenOnce, resolveService, sendTo, validCmdlessAppName, waitForService } from './utils.js';
+import { acquireLock, getAppDataPath, getCmdlessRoot, getTmpSocketPath, listenExclusive, listenOnce, resolveService, sendTo, validCmdlessAppName, waitForService } from './utils.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'service.fixture.ts');
 const run = (...args: string[]): [string, string[]] => [process.execPath, ['--import', 'tsx', fixture, ...args]];
@@ -97,4 +97,16 @@ test('an app name is a package name\'s shape, and nothing that leaves its folder
     assert.throws(() => validCmdlessAppName(name), /isn't an app name/, name);
   assert.equal(path.relative(getCmdlessRoot(), getAppDataPath('@cmdless/gh-approvals')), path.join('apps', '@cmdless', 'gh-approvals'));
   assert.throws(() => getAppDataPath('../../etc'), /isn't an app name/);
+});
+
+test('acquireLock holds one at a time, and the next gets it once it\'s let go', async () => {
+  const name = `cmdless-lock-test-${process.pid}`;
+  const order: string[] = [];
+  const release = await acquireLock(name);
+  const second = acquireLock(name).then(release => { order.push('second'); return release; });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  order.push('first done');
+  await release();
+  await (await second)();
+  assert.deepEqual(order, ['first done', 'second']);
 });
