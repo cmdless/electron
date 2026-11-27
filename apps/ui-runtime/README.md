@@ -8,7 +8,7 @@ Normally you don't run this directly: `UIHost` in [`@cmdless/ui-sdk/node`](../..
 
 - `host` — run the host for an app. It takes no arguments: the app's name comes from `CMDLESS_APP` (left out, a throwaway one is made), the cmdless root from `CMDLESS_ROOT`, and where to report its address from `CMDLESS_SERVICE_SOCKET` (set by `waitForService`).
 - `launch install` — set up opening `.cmdless` files on this machine through this runtime (see [The launcher](#the-launcher)). Run through `npx @cmdless/ui launch install`, so it's the cached copy that's set up.
-- `launch add <file>` and `launch open <file>` — make sure that's set up, then pass the file on to `@cmdless/launch-tray`: the newest version already cached, and the latest from npm only when there's none. Nothing updates what's cached. `open` is what a double-click runs, so it has nowhere to print: what it did goes to `launch.log`.
+- `launch add <file>` and `launch open <file>` — make sure that's set up, read the file, and hand its launch to `@cmdless/launch-tray` through `LaunchHost` (in ui-sdk), printing what came of it: `added`, `replaced`, `unchanged` or `cancelled` for `add`; `opened` or `cancelled` for `open`. `open` is what a double-click runs, so it has nowhere to print: what it did goes to `launch.log`.
 
 ## The launcher
 
