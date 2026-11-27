@@ -773,6 +773,7 @@ async function loginAs() {
       type: 'object', required: ['login'],
       properties: { login: { type: 'string', title: 'GitHub login', pattern: GITHUB_LOGIN } },
     },
+    uiSchema: { login: { 'ui:autofocus': true } },
     submitText: 'Login',
     window: { title: `${appName}: Login As` },
   });
