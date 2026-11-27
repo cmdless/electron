@@ -28,6 +28,8 @@ export type InitializeResult = {
   // whether this connection owns the host: the one whose creator started the
   // process that got the app's lock. The host lives as long as it does.
   hasSingleInstanceLock: boolean;
+  // this connection's id, which other UIHosts of the app send to
+  connectionId: string;
 };
 
 // how a window looks on the desktop - what goes to Electron's BrowserWindow.
@@ -155,6 +157,17 @@ export type HandleCloseParams = HandleParams & { value?: unknown };
 // hand ends it with no value.
 export type HandleClosedParams = HandleParams & { value?: unknown; error?: string };
 
+// a UIHost connected to the host - one per process that created or joined
+// it - and whether it's the owner
+export type ConnectionInfo = { id: string; owner: boolean };
+
+// a message for another of the app's UIHosts, by its connection id - the
+// owner's, if to is left out. Anything JSON can carry.
+export type SendParams = { to?: string; message: unknown };
+
+// a message from another of the app's UIHosts, and which one it's from
+export type ConnectionMessage = { from: string; message: unknown };
+
 const uiHostProtocol = defineProtocol(({ side, request, notification }) => ({
   clientToServer: side({
     requests: {
@@ -171,6 +184,8 @@ const uiHostProtocol = defineProtocol(({ side, request, notification }) => ({
       cardOpen: request<CardParams, HandleParams>('card/open'),
       cardUpdate: request<CardUpdateParams>('card/update'),
       formOpen: request<FormParams, HandleParams>('form/open'),
+      connections: request<void, ConnectionInfo[]>('connections'),
+      connectionSend: request<SendParams>('connection/send'),
     },
   }),
   serverToClient: side({
@@ -178,6 +193,7 @@ const uiHostProtocol = defineProtocol(({ side, request, notification }) => ({
       handleClosed: notification<HandleClosedParams>('handle/closed'),
       trayEvent: notification<HandleParams & TrayEvent>('tray/event'),
       cardEvent: notification<HandleParams & CardEvent>('card/event'),
+      connectionMessage: notification<ConnectionMessage>('connection/message'),
     },
     requests: {
       windowConnect: request<WindowConnectParams, WindowConnectResult>('window/connect'),
@@ -374,6 +390,7 @@ export class UIHost implements UIOpener {
 
   readonly shell = new UIShellHandler(this);
   readonly clipboard = new UIClipboardHandler(this);
+  private readonly messageListeners = new Set<(message: ConnectionMessage) => void>();
   private readonly remotes = new Map<string, RemoteHandle<any>>();
   // A handle can end before the reply saying it opened arrives: on macOS a
   // dialog with no parent holds the host up until it's answered, so its end
@@ -406,11 +423,38 @@ export class UIHost implements UIOpener {
       const remote = this.remotes.get(id);
       if (remote instanceof RemoteCard) remote[emit](event);
     });
+    client.onNotification.connectionMessage(message => {
+      for (const listener of [...this.messageListeners]) listener(message);
+    });
     client.onClose(() => {
       for (const remote of this.remotes.values()) remote[end]({ error: 'the host went away' });
       this.remotes.clear();
       void this.closeBackendServer();
     });
+  }
+
+  // this UIHost's own connection id - what the others send to
+  get connectionId() {
+    return this.params.connectionId;
+  }
+
+  // every UIHost connected to the host, this one included, and which is the
+  // owner
+  connections() {
+    return this.client.request.connections();
+  }
+
+  // sends a message to another of the app's UIHosts: the owner, unless to
+  // names another connection. Settles once the host has passed it on, and
+  // fails if there's no such connection.
+  send(message: unknown, to?: string) {
+    return this.client.request.connectionSend({ to, message });
+  }
+
+  // hears every message another UIHost sends this one
+  onMessage(listener: (message: ConnectionMessage) => void) {
+    this.messageListeners.add(listener);
+    return { dispose: () => { this.messageListeners.delete(listener); } };
   }
 
   // a window's page asking for its backend: a token for one connection

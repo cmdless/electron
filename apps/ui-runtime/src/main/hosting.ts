@@ -6,7 +6,7 @@ import type { types, ViewProps } from '@cmdless/ui-sdk';
 import { getCmdlessUIVersion, getTmpSocketPath, UIHost } from '@cmdless/ui-sdk/node';
 import type {
   CardParams, CardUpdateParams, FormParams, ViewWindowParams, WindowConnectParams, WindowOptions,
-  DialogParams, HandleClosedParams, HandleParams, HostService, InitializeResult, NotificationParams, TrayEvent,
+  ConnectionMessage, DialogParams, HandleClosedParams, HandleParams, HostService, InitializeResult, NotificationParams, TrayEvent,
   TrayMenuItem, TrayParams, UIServer, WindowOpenParams,
 } from '@cmdless/ui-sdk/node';
 import { asElectronIPC } from '@cmdless/rpc-sdk';
@@ -122,6 +122,12 @@ export class ServerHandle {
 
   cardEvent(params: HandleParams & types.CardEvent) {
     if (this.connected) this.server.notify.cardEvent(params);
+  }
+
+  // a message from another of the app's UIHosts
+  message(params: ConnectionMessage) {
+    if (!this.connected) throw new Error('that connection has gone');
+    this.server.notify.connectionMessage(params);
   }
 
   // a window's page asking for its backend: its UIHost says where, with a
@@ -476,7 +482,7 @@ function trayImage(icon: string) {
 }
 
 // what the host reports to every UIHost about itself
-export type HostInfo = Omit<InitializeResult, 'hasSingleInstanceLock' | 'sdkVersion'>;
+export type HostInfo = Omit<InitializeResult, 'hasSingleInstanceLock' | 'sdkVersion' | 'connectionId'>;
 
 // the host: where it listens, and every UIHost connected to it. The first to
 // connect is its owner - nothing else is told the address until it has.
@@ -562,7 +568,7 @@ export class Host {
           server.onClose(() => host.servers.delete(current.id));
           if (owner) ownerConnected(current);
 
-          const result: InitializeResult = { ...info, sdkVersion, hasSingleInstanceLock: owner };
+          const result: InitializeResult = { ...info, sdkVersion, hasSingleInstanceLock: owner, connectionId: current.id };
           return result;
         });
 
@@ -625,6 +631,22 @@ export class Host {
           const found = initialized().handles.get(id);
           if (!found) throw new Error(`no handle ${id}`);
           found.dispose(value);
+        });
+
+        server.onRequest.connections(() => {
+          initialized();
+          return [...host.servers.values()].map(({ id, isOwner }) => ({ id, owner: isOwner }));
+        });
+
+        // passed on to the connection it's for - the owner's, if it names
+        // none
+        server.onRequest.connectionSend(({ to, message }) => {
+          const from = initialized();
+          const target = to === undefined
+            ? [...host.servers.values()].find(each => each.isOwner)
+            : host.servers.get(to);
+          if (!target) throw new Error(to === undefined ? 'the host has no owner' : `no connection ${to}`);
+          target.message({ from: from.id, message });
         });
 
         server.onRequest.handleFocus(({ id }) => {
