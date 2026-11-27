@@ -3,10 +3,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteWindow, TrayMenuItem, TrayParams } from '@cmdless/ui-sdk/node';
-import { ghInstalled, startLogin, tokenFor } from './accounts.js';
+import { ghAccounts, ghInstalled, GITHUB_LOGIN, isGitHubLogin, startLogin, tokenFor } from './accounts.js';
 import { approveDeployment, approvePullRequest } from './approvals.js';
 import { byUrl } from '../shared/items.js';
 import type { Item, Items } from '../shared/items.js';
@@ -74,7 +75,7 @@ try {
     const [command, name, ...rest] = positionals;
     if (command !== 'set') throw new Error(`no command ${positionals.join(' ')}`);
     if (name === 'user') {
-      if (rest.length !== 1 || !rest[0].trim()) throw new Error('set user takes a GitHub login');
+      if (rest.length !== 1 || !isGitHubLogin(rest[0].trim())) throw new Error('set user takes a GitHub login');
       setting = { user: rest[0].trim() };
     } else if (name === 'org') {
       const [action, owner, extra] = rest;
@@ -91,9 +92,20 @@ try {
   process.exit(2);
 }
 
+// a run the tray started to restart itself (switching accounts) - 'sign-in'
+// if it should sign in once it's up
+const restarting = process.env.GH_APPROVALS_RESTART;
+delete process.env.GH_APPROVALS_RESTART;
+
 // the app's own host, named after the package - running this again joins the
-// one that's already up rather than starting another
-const host = await UIHost.create({ app: pkg.name });
+// one that's already up rather than starting another. A restart waits for
+// the old tray's host to go instead, then starts its own.
+let host = await UIHost.create({ app: pkg.name });
+while (restarting && !host.params.hasSingleInstanceLock) {
+  const joined = host;
+  await new Promise<void>(resolve => joined.onClose(resolve));
+  host = await UIHost.create({ app: pkg.name });
+}
 
 // it's already running, tray and all, so there's nothing more to do here -
 // and a setting would be written over by it, so it isn't changed
@@ -152,26 +164,26 @@ if (setting !== undefined) {
   host.dispose();
   process.exit(0);
 }
-// the account it runs for has to be set before it can run at all
-if (!config.user) {
-  console.error(`set the GitHub account first: ${appName} set user <github login>`);
-  host.dispose();
-  process.exit(2);
-}
-const user = config.user;
+// the account it runs for - none until one's chosen, and until then it only
+// offers to choose
+const user = config.user ?? '';
 const orgs = config.orgs;
 await saveConfig();
 log(config.provider ? `started, sharing through ${providerLabel(config.provider)}` : 'started, not sharing');
 
-// GitHub, asked conditionally - what it last answered is kept in userData,
+// what's kept for the user it runs as - each user's own, so switching back
+// finds it where it was. With no user, nothing's ever written there.
+const userFolder = path.join(host.params.userData, 'users', user || '-');
+
+// GitHub, asked conditionally - what it last answered is kept for this user,
 // this machine's own business
-const github = new GitHub(path.join(host.params.userData, 'github-cache.json'), appName);
+const github = new GitHub(path.join(userFolder, 'github-cache.json'), appName);
 await github.load();
 const inbox = new Inbox(github, user, orgs);
 
 // this user's items, served to the other trays - what was there last time
 // until the first scan
-const itemsFile = path.join(host.params.userData, 'items.json');
+const itemsFile = path.join(userFolder, 'items.json');
 const store = await trayProtocol.createStore({
   items: memory(JSON.parse(await fs.promises.readFile(itemsFile, 'utf8').catch(() => '{}')) as Items),
 });
@@ -219,6 +231,8 @@ let ghMissing = false;
 let signedIn: boolean | undefined;
 // a sign-in is going on, in the browser
 let signingIn = false;
+// the accounts gh is signed in to, as of the last check
+let accounts: string[] = [];
 
 // the next poll: after as long as GitHub asks, or sooner if a refresh is
 // asked for first
@@ -263,6 +277,20 @@ function checkNowLabel() {
     ...lastRefresh ? [`last ${lastRefresh.quotaCosting} (${lastRefresh.requests})`] : [],
   ];
   return parts.length ? `Check Now (${parts.join(', ')})` : 'Check Now';
+}
+
+// every account gh has, and this one's user if gh hasn't it - choosing one
+// signs in as it, switching to it first if it's someone else; the user it's
+// signed in as already isn't a choice. Login As... names anyone else.
+function switchAccount(): TrayMenuItem {
+  const logins = [...new Set([...user ? [user] : [], ...accounts])];
+  return {
+    type: 'submenu', label: 'Switch Account', enabled: !busy && !signingIn, submenu: [
+      ...logins.map(login => ({ id: `switch:${login}`, label: login, enabled: !(login === user && signedIn) })),
+      ...logins.length ? [{ type: 'separator' } satisfies TrayMenuItem] : [],
+      { id: 'login-as', label: 'Login As...' },
+    ],
+  };
 }
 
 function menu(): TrayMenuItem[] {
@@ -338,6 +366,7 @@ function menu(): TrayMenuItem[] {
     ...(ghMissing || signedIn === undefined ? [] : [signedIn
       ? {
         type: 'submenu', label: `Logged in as ${user}`, submenu: [
+          switchAccount(),
           { type: 'separator' },
           { id: 'notification-settings', label: 'GitHub Notification settings...' },
           { id: 'notifications', label: 'GitHub Notifications...' },
@@ -355,7 +384,7 @@ function menu(): TrayMenuItem[] {
       }
       : signingIn
         ? { id: 'signing-in', label: `Logging in to GitHub (${user})…`, enabled: false }
-        : { id: 'sign-in', label: `Login to GitHub (${user})...`, enabled: !busy }] satisfies TrayMenuItem[]),
+        : { type: 'submenu', label: 'Login to GitHub', enabled: !busy, submenu: [switchAccount()] }] satisfies TrayMenuItem[]),
     // at the top, so refreshing is always right there
     { id: 'refresh', label: checkNowLabel(), enabled: usable },
     { type: 'separator' },
@@ -570,6 +599,11 @@ function unlink(deviceId: string) {
 async function signInState(): Promise<{ ghToken: string } | { status: Partial<TrayParams> }> {
   ghMissing = !(await ghInstalled());
   if (ghMissing) return { status: { icon: icons.clear, tooltip: 'gh isn\'t installed' } };
+  accounts = await ghAccounts();
+  if (!user) {
+    signedIn = false;
+    return { status: { icon: icons.clear, tooltip: 'Choose a GitHub account to check' } };
+  }
   const ghToken = await tokenFor(user);
   signedIn = !!ghToken;
   if (!ghToken) return { status: { icon: icons.clear, tooltip: `Log in to GitHub as ${user} to check` } };
@@ -712,6 +746,35 @@ async function signIn() {
   }
 }
 
+// Another user, by starting the tray again as them: everything here - the
+// inbox, what the other trays know it as - is that user's. The new run
+// waits for this one to go, then signs in. The same user just signs in.
+async function switchTo(login: string) {
+  if (!isGitHubLogin(login)) return log(`${JSON.stringify(login)} isn't a GitHub login`);
+  if (login === user) return void signIn();
+  config.user = login;
+  await saveConfig();
+  log(`switching to ${login}`);
+  spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    detached: true, stdio: 'ignore', env: { ...process.env, GH_APPROVALS_RESTART: 'sign-in' },
+  }).unref();
+  await leave();
+}
+
+// any GitHub login, typed in - then switched to as one gh has would be
+async function loginAs() {
+  const form = await host.openForm<{ login?: string }>({
+    schema: {
+      type: 'object', required: ['login'],
+      properties: { login: { type: 'string', title: 'GitHub login', pattern: GITHUB_LOGIN } },
+    },
+    submitText: 'Login',
+    window: { title: `${appName}: Login As` },
+  });
+  const login = (await form.closed)?.login?.trim();
+  if (login) await switchTo(login);
+}
+
 // turned on, the next refresh looks over the whole inbox - done items too -
 // so what finished before is marked done as well
 async function toggleAutoMarkDone() {
@@ -777,7 +840,6 @@ tray.onEvent(event => {
     return void operation(() => refresh(true));
   }
   if (item === 'gh-download') return void host.shell.openExternal(GH_DOWNLOAD);
-  if (item === 'sign-in') return void signIn();
   if (item === 'notification-settings') return void host.shell.openExternal(NOTIFICATION_SETTINGS);
   if (item === 'notifications') return void host.shell.openExternal(NOTIFICATIONS);
   if (item === 'auto-mark-done') return void toggleAutoMarkDone();
@@ -786,6 +848,8 @@ tray.onEvent(event => {
   if (item === 'shortcuts') return void showShortcuts();
   if (item === 'provider-login') return void providerLogin();
   if (item === 'provider-logout') return void operation(providerLogout);
+  if (item === 'login-as') return void loginAs();
+  if (item.startsWith('switch:')) return void switchTo(item.slice('switch:'.length));
   if (!item.startsWith('{')) return;
 
   const action = JSON.parse(item) as Action;
@@ -905,4 +969,6 @@ function followAccount(providers: Record<string, ProviderStatus> | undefined) {
 }
 if (auth) await auth.state.providers.subscribe(followAccount);
 
-void operation(() => refresh(true));
+await operation(() => refresh(true));
+// started to switch accounts: signed in as the new one, if gh isn't already
+if (restarting === 'sign-in' && user && signedIn === false) void signIn();
