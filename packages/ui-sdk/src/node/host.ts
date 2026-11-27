@@ -186,6 +186,9 @@ const uiHostProtocol = defineProtocol(({ side, request, notification }) => ({
       formOpen: request<FormParams, HandleParams>('form/open'),
       connections: request<void, ConnectionInfo[]>('connections'),
       connectionSend: request<SendParams>('connection/send'),
+      // this UIHost has finished setting itself up (CreateHostOptions'
+      // initialize) - for the owner, what other UIHosts wait on to join
+      ready: request<void>('ready'),
     },
   }),
   serverToClient: side({
@@ -212,6 +215,11 @@ export type CreateHostOptions = {
   cmdlessRoot?: string;
   // how long the host gets to start and report where it is
   timeoutMs?: number;
+  // sets the UIHost up before anything else can reach it: for the owner, no
+  // other UIHost joins - and so none can send it a message - until this has
+  // settled. Where onMessage, a tray and the like go. If it throws, create
+  // does, and leaves the host.
+  initialize?: (host: UIHost) => void | Promise<void>;
 };
 
 // what serves a window's page: called with each connection the page makes
@@ -501,7 +509,7 @@ export class UIHost implements UIOpener {
   // the lock holder's when it doesn't. Everything it needs goes through its
   // env - the app (CMDLESS_APP), the root (CMDLESS_ROOT) and where to report
   // (CMDLESS_SERVICE_SOCKET).
-  static async create({ app, cmdlessRoot, timeoutMs }: CreateHostOptions = {}) {
+  static async create({ app, cmdlessRoot, timeoutMs, initialize }: CreateHostOptions = {}) {
     const sdkVersion = await getCmdlessUIVersion();
     const { binPath, env } = await resolvePackageBin(import.meta, '@cmdless/ui-runtime', sdkVersion, cmdlessRoot);
     if (app) setCmdlessApp(app, env);
@@ -510,7 +518,10 @@ export class UIHost implements UIOpener {
     const client = await connectSocket(uiHostProtocol, { path: value.address });
     client.listen();
     try {
-      return new UIHost(client, await client.request.init({ sdkVersion }));
+      const host = new UIHost(client, await client.request.init({ sdkVersion }));
+      await initialize?.(host);
+      await client.request.ready();
+      return host;
     } catch (error) {
       client.dispose();
       throw error;

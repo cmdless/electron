@@ -120,7 +120,8 @@ async function main() {
   });
 
   // a process that lost the lock gets the address only once the owner has
-  // connected
+  // connected and set itself up - so nothing it sends the owner arrives
+  // before the owner is listening
   app.on('second-instance', async (_, __, ___, data: unknown) => {
     try {
       await host.owned;
@@ -139,7 +140,9 @@ async function main() {
   // would ever end this process, so it ends itself
   await resolveService(host.service);
   const ownerTimeout = setTimeout(quit, OWNER_TIMEOUT_MS);
-  void host.owned.then(() => clearTimeout(ownerTimeout));
+  // connecting is what it has to do in time - setting itself up after can take
+  // as long as it takes
+  void host.connected.then(() => clearTimeout(ownerTimeout));
 }
 
 void main().catch(async error => {
