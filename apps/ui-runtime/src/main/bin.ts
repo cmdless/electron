@@ -82,11 +82,13 @@ launch
 launch
   .command('open').description('Open a .cmdless file through @cmdless/launch-tray - what the shim runs')
   .argument('<file>', 'The .cmdless file')
-  .action(async (file: string) => {
+  .option('--command <name>', 'Which of its named commands to run - asked, if it has several and this is left out')
+  .option('--keep', 'Keep it under Launch in the tray as well')
+  .action(async (file: string, { command, keep }: { command?: string; keep?: boolean }) => {
     try {
       await ensureLauncher(pkg.version);
       const launch = readLaunch(file);
-      logLaunch(`open ${file}: ${await LaunchHost.open(launch)}`);
+      logLaunch(`open ${file}: ${await LaunchHost.open(launch, { command, keep })}`);
     } catch (error) {
       logLaunch(`open ${file} failed: ${(error as Error).message}`);
       process.exitCode = 1;
