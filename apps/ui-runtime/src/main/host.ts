@@ -125,6 +125,11 @@ async function main() {
     if (docked) void app.dock?.show();
     else app.dock?.hide();
   });
+  // macOS gives an app it opens - a notification of its clicked, say - a
+  // Dock icon whatever it's showing; with nothing open, it goes again
+  const undock = () => { if (!docked) app.dock?.hide(); };
+  app.on('activate', undock);
+  app.on('did-become-active', undock);
 
   // a process that lost the lock gets the address only once the owner has
   // connected and set itself up - so nothing it sends the owner arrives
