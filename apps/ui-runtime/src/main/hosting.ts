@@ -41,11 +41,16 @@ export abstract class UIHandle {
     return undefined;
   }
 
-  // whether it's something the Dock icon is shown for - a window or a
-  // dialog; a tray lives outside the Dock. A getter, so it's already right
-  // while the base constructor adds it.
+  // whether it's something the Dock icon is shown for - a window; a tray
+  // lives outside the Dock, and so does a dialog (see DialogHandle). A
+  // getter, so it's already right while the base constructor adds it.
   get showsInDock() {
     return true;
+  }
+
+  // whether Quit closes it - what's on screen: a window, or a dialog
+  get closesOnQuit() {
+    return this.showsInDock;
   }
 
   // opens a window in front of this one, for the same UIHost
@@ -377,18 +382,12 @@ export class DialogHandle extends UIHandle {
     super(owner);
     const { type, message, detail, buttons, defaultId, cancelId, checkboxLabel, checkboxChecked } = params;
     const options = { type, message, detail, buttons, defaultId, cancelId, checkboxLabel, checkboxChecked, signal: this.dismissed.signal };
-    // With no Dock icon until now, the app isn't the active one, and a dialog
-    // with no window to sit on would open behind whatever is. macOS won't
-    // bring forward an app whose Dock icon isn't up yet - it bounces it
-    // instead - so the icon (which this dialog has just asked for) is waited
-    // on first.
-    const shown = (async () => {
-      if (!parent) {
-        await app.dock?.show();
-        app.focus({ steal: true });
-      }
-      return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
-    })();
+    // A dialog with no window to sit on would open behind whatever's active,
+    // so the app's brought forward first. It stays Dock-less for it: an app
+    // switched to having a Dock icon just then isn't brought forward - macOS
+    // bounces the icon instead - while one that stays an accessory is.
+    if (!parent) app.focus({ steal: true });
+    const shown = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
     this.modal = process.platform === 'darwin' && !parent;
     if (this.modal) {
       DialogHandle.modal++;
@@ -401,6 +400,17 @@ export class DialogHandle extends UIHandle {
       ({ response, checkboxChecked }) => this.dispose({ response, checkboxChecked }),
       error => this.dispose(undefined, String(error)),
     );
+  }
+
+  // no Dock icon for a dialog: one on a window is a sheet on it, which has
+  // its own, and one on its own only comes forward while the app stays an
+  // accessory (see above)
+  override get showsInDock() {
+    return false;
+  }
+
+  override get closesOnQuit() {
+    return true;
   }
 
   // an app-modal one can't be dismissed - it stays until it's answered
@@ -511,8 +521,8 @@ export class Host {
     this.ownerClosed = connected.then(owner => new Promise<void>(resolve => owner.server.onClose(resolve)));
   }
 
-  // how many windows and dialogs are open, across every UIHost - what the
-  // Dock icon is shown for (trays aren't)
+  // how many windows are open, across every UIHost - what the Dock icon is
+  // shown for (trays and dialogs aren't)
   get shownCount() {
     let count = 0;
     for (const server of this.servers.values())
@@ -532,7 +542,7 @@ export class Host {
   // closed, as if the person had closed it
   closeShown() {
     for (const server of [...this.servers.values()])
-      for (const handle of [...server.handles.values()]) if (handle.showsInDock) handle.dispose();
+      for (const handle of [...server.handles.values()]) if (handle.closesOnQuit) handle.dispose();
   }
 
   onHandlesChanged(listener: (count: number) => void) {
