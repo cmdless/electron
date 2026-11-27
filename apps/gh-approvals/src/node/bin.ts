@@ -385,9 +385,12 @@ function menu(): TrayMenuItem[] {
       : signingIn
         ? { id: 'signing-in', label: `Logging in to GitHub (${user})…`, enabled: false }
         : { type: 'submenu', label: 'Login to GitHub', enabled: !busy, submenu: [switchAccount()] }] satisfies TrayMenuItem[]),
-    // at the top, so refreshing is always right there
-    { id: 'refresh', label: checkNowLabel(), enabled: usable },
-    { type: 'separator' },
+    // at the top, so refreshing is always right there - once there's someone
+    // to check for
+    ...(user ? [
+      { id: 'refresh', label: checkNowLabel(), enabled: usable },
+      { type: 'separator' },
+    ] satisfies TrayMenuItem[] : []),
     // a provider's account to sign in to first - where the others will be
     ...(signedIn && account && accountStatus !== 'signed-in' ? [accountStatus === 'signing-in'
       ? { id: 'provider-logging-in', label: `Logging in to ${providerName(provider!)}…`, enabled: false }
@@ -414,7 +417,9 @@ function menu(): TrayMenuItem[] {
   ];
 }
 
-const tray = await host.createTray({ icon: icons.syncing, tooltip: `Checking ${user}'s inbox…`, menu: menu() });
+const tray = await host.createTray({
+  icon: icons.syncing, tooltip: user ? `Checking ${user}'s inbox…` : 'Choose a GitHub account to check', menu: menu(),
+});
 const render = (changes: Partial<TrayParams> = {}) => tray.update({ ...changes, menu: menu() });
 
 // signed in as this user, with a share: the tray joins the others - they see
