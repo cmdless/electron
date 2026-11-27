@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { app, Menu, shell } from 'electron';
+import { app, Menu, powerMonitor, shell } from 'electron';
 import { electronApp, optimizer } from '@electron-toolkit/utils';
 import {
   isEphemeralCmdlessApp, listenOnce, rejectService, resolveCmdlessApp, resolveService, sendTo,
@@ -52,9 +52,16 @@ function writeShortcut(appName: string) {
 // how long the owner gets to connect once it's been told where to
 const OWNER_TIMEOUT_MS = 10_000;
 
+// whether this process is quitting because it decided to (quit, below), or
+// because the system is logging out, restarting or shutting down - any
+// other quit is someone asking it to (the Dock's Quit, say)
+let quitting = false;
+let poweringOff = false;
+
 // quits - once any app-modal message box is answered: macOS won't let an
 // app quit while one is up, and one asked for meanwhile is lost
 function quit() {
+  quitting = true;
   void DialogHandle.whenNoneModal().then(() => app.quit());
 }
 
@@ -132,10 +139,19 @@ async function main() {
   });
 
   await ready;
-  // Quit closes every window and dialog - and quits, as it always would,
-  // unless a tray is up: the app goes on for that, as it does with no
-  // windows open. Quitting from the Dock, or logging out, still quits.
-  Menu.setApplicationMenu(appMenu(() => host.hasTray ? host.closeShown() : quit()));
+  // Quit - the menu's, or the Dock's - closes every window and dialog, and
+  // quits as it always would unless a tray is up: the app goes on for that,
+  // as it does with no windows open. A logout, restart or shutdown is
+  // announced before it asks the app to quit, and that quits outright, so
+  // it's never held up.
+  const quitAsked = () => host.hasTray ? host.closeShown() : quit();
+  Menu.setApplicationMenu(appMenu(quitAsked));
+  powerMonitor.on('shutdown', () => { poweringOff = true; });
+  app.on('before-quit', event => {
+    if (quitting || poweringOff) return;
+    event.preventDefault();
+    quitAsked();
+  });
   // the owner is told where to connect - and if it never does, nothing
   // would ever end this process, so it ends itself
   await resolveService(host.service);

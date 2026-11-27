@@ -24,6 +24,7 @@ Electron main is itself the host: it takes the app's single-instance lock, serve
 
 - **One host per app name.** A host started for an app that's already running loses the lock and hands the running one a reply socket; the running host answers once its owner has connected, and the loser passes the address on to its own creator before quitting.
 - **The owner decides its lifetime.** The first `UIHost` to connect — the one whose creator started the process that got the lock — owns the host, and the host quits when it disconnects. Everything another `UIHost` opened goes with it.
+- **Quit leaves a tray up.** Quit — the app menu's (Cmd+Q, Ctrl+Q on Linux) or the Dock's — closes every window and dialog, and quits only if no `UIHost` has a tray up; a tray's own Quit is how its app ends. A logout, restart or shutdown is announced before it asks the app to quit, and that quits outright, so it's never held up.
 - **Throwaway hosts clean up after themselves.** An app with no name gets a throwaway one under temp; a small process (`cleanup.ts`) that outlives the host removes its `userData` once it's gone, however it ends.
 - **The Dock icon** shows only while a window or dialog is open; trays live outside it.
 - **A tray given no icon** (an empty string) gets the runtime's own, `resources/trayTemplate.png`.
