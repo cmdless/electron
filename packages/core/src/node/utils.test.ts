@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
-import { getTmpSocketPath, listenExclusive, listenOnce, resolveService, sendTo, waitForService } from './utils.js';
+import { getAppDataPath, getCmdlessRoot, getTmpSocketPath, listenExclusive, listenOnce, resolveService, sendTo, validCmdlessAppName, waitForService } from './utils.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'service.fixture.ts');
 const run = (...args: string[]): [string, string[]] => [process.execPath, ['--import', 'tsx', fixture, ...args]];
@@ -87,4 +87,14 @@ test('listenOnce rejects with a reject message, a hang-up, or the timeout', asyn
   await assert.rejects(hungUp.message, /hung up/);
 
   await assert.rejects((await listenOnce(1)).message, /nothing arrived within 1ms/);
+});
+
+test('an app name is a package name\'s shape, and nothing that leaves its folder', () => {
+  for (const name of ['hangar', 'cmdless-auth', '@cmdless/gh-approvals', 'a.b_c~d-e', '0app'])
+    assert.equal(validCmdlessAppName(name), name);
+  for (const name of ['', '..', '.', '../x', 'a/../b', '@cmdless/../x', '@scope/', '@/x', 'a/b', 'a\\b', '/abs', 'C:\\x',
+    '.hidden', '-flag', 'Upper', 'a b', '@a/b/c', 'x'.repeat(215)])
+    assert.throws(() => validCmdlessAppName(name), /isn't an app name/, name);
+  assert.equal(path.relative(getCmdlessRoot(), getAppDataPath('@cmdless/gh-approvals')), path.join('apps', '@cmdless', 'gh-approvals'));
+  assert.throws(() => getAppDataPath('../../etc'), /isn't an app name/);
 });
