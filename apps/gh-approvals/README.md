@@ -3,13 +3,19 @@
 GitHub approvals, from the tray: the pull requests your review is requested on and the deployments waiting on your approval, from your notification inbox — and everyone else's, straight from their trays.
 
 ```
-gh-approvals --user <github login> [--org <owner>]...
-gh-approvals set provider <provider>...
+gh-approvals
+gh-approvals set user <github login>
+gh-approvals set org add <owner> | remove <owner> | clear
+gh-approvals set provider none | <provider>...
 ```
 
-- `--user` — the GitHub account it runs for. [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
-- `--org` — only what's in this owner's repositories. Repeat it for more.
-- `set provider` — what the trays find each other through, kept in `config.json` for every run after: `folder <path>`, `graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items. It's refused while the tray runs. To set it and start: `gh-approvals set provider folder ~/OneDrive/team && gh-approvals --user <login>`.
+Run with nothing, it's the tray. Its settings are kept in `config.json` for every run after, each set once with `set` — which is refused while the tray runs, since it would be written over:
+
+- `set user` — the GitHub account it runs for. It won't start until it's set. [gh](https://cli.github.com/) has to be signed in as it (the tray offers to log in); until it is, the tray does nothing else.
+- `set org` — only what's in these owners' repositories: `add` or `remove` one, or `clear` them all. With none, everything.
+- `set provider` — what the trays find each other through: `folder <path>`, `graph-app-folder <tenant id> <client id> [personal | drive <drive id> | site <site id>] [<redirect URI>]` or `dropbox [<app key> [<redirect URI>]]`, configured as every [RTC provider](../../packages/rtc-sdk#provider-settings) is — or `none`, and the tray shows just your own items.
+
+To set it up and start: `gh-approvals set user <login> && gh-approvals set provider folder ~/OneDrive/team && gh-approvals`.
 
 For a team through Microsoft Graph, the App folder is one everyone can reach — a SharePoint site's (`site <site id>`) or a document library's (`drive <drive id>`) — not `personal`, which is each user's own.
 
@@ -29,7 +35,7 @@ While it's signed in and has a provider, a tray is a device on it — an [RTC ho
 
 **Approval UI…** in the account menu opens a window on every device the tray knows of: its own, and each tray it's connected to, each with its pull requests and deployments by repository. Each tray's items come over as it changes them, and the window follows them as they do.
 
-**Show Shortcuts…** in the same menu has a script that starts the tray as this one was started — its provider set, then `--user` and each `--org` — for Windows (`.cmd`), macOS (`.command`) or Linux (`.sh`), and from npm or straight from this repo through [gx](https://github.com/cmdless/gx), which builds it once per commit. Setting the provider is refused while a tray is running, so a script run then just brings up the one that's running.
+**Show Shortcuts…** in the same menu has a script that starts the tray as this one was started — its provider, account and owners set, then the tray — for Windows (`.cmd`), macOS (`.command`) or Linux (`.sh`), and from npm or straight from this repo through [gx](https://github.com/cmdless/gx), which builds it once per commit. Settings are refused while a tray is running, so a script run then just brings up the one that's running.
 
 A provider with an account (Microsoft's, Dropbox's) is signed in to through the [auth broker](../../apps/auth), which keeps the sign-in for every run after. Until it is, **Login to OneDrive...** (or SharePoint, or Dropbox) stands where **Users** would; once it is, **Users** takes its place, and **Logout of OneDrive** is at the end of the account menu.
 
@@ -48,6 +54,6 @@ A deployment is approved one environment at a time. A pull request marked `*` wa
 
 ## Elsewhere in userData
 
-- `config.json` — this machine's device id, the provider, Automatically Mark as Done, and the last refresh's cost and rate limit.
+- `config.json` — this machine's device id, the account and owners, the provider, Automatically Mark as Done, and the last refresh's cost and rate limit.
 - `items.json` — your items as of the last refresh, served until the next one.
 - `log.txt` — what it did; **Log Viewer…** tails it in a window.
