@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@cmdless/core": "*",
+    "@cmdless/rpc-sdk": "*",
     "@cmdless/ui-sdk": "*"
   }
 }
