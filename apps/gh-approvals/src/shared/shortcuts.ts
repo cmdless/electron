@@ -16,16 +16,15 @@ export const SOURCES: { value: Source; label: string }[] = [
 ];
 
 // what the tray knows of how it's run: its package, the repo it's in and the
-// root script that builds it, this platform, and the arguments of each
-// command - set (provider ...) and run (--user ...)
+// root script that builds it, this platform, and the set commands that give
+// its settings - each one's arguments - before it's run
 export type ShortcutSettings = {
   app: string;
   packageName: string;
   repo: string;
   build: string;
   platform: Platform;
-  set: string[];
-  run: string[];
+  setup: string[][];
 };
 
 export const platformOf = (nodePlatform: string): Platform =>
@@ -60,7 +59,7 @@ function command(settings: ShortcutSettings, source: Source) {
 export const fileName = (settings: ShortcutSettings, platform: Platform) =>
   `${settings.app}${platform === 'windows' ? '.cmd' : platform === 'macos' ? '.command' : '.sh'}`;
 
-// The script: the provider set - which is refused while the tray's already
+// The script: its settings set - each refused while the tray's already
 // running, and then the run joins it - and the tray started
 export function shortcut(settings: ShortcutSettings, platform: Platform, source: Source) {
   const base = command(settings, source);
@@ -70,8 +69,8 @@ export function shortcut(settings: ShortcutSettings, platform: Platform, source:
     return [
       '@echo off',
       `rem ${settings.app}: ${from}`,
-      `call ${line(settings.set)}`,
-      `call ${line(settings.run)}`,
+      ...settings.setup.map(args => `call ${line(args)}`),
+      `call ${line([])}`,
       '',
     ].join('\r\n');
   }
@@ -80,8 +79,8 @@ export function shortcut(settings: ShortcutSettings, platform: Platform, source:
     '#!/bin/sh',
     `# ${settings.app}: ${from}`,
     ...platform === 'macos' ? ['# double-click it to start the tray (chmod +x it once)'] : ['# chmod +x it once, then run it'],
-    line(settings.set),
-    `exec ${line(settings.run)}`,
+    ...settings.setup.map(line),
+    `exec ${line([])}`,
     '',
   ].join('\n');
 }

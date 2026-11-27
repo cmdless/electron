@@ -48,31 +48,53 @@ const NOTIFICATION_SETTINGS = 'https://github.com/settings/notifications';
 // how much of a title a menu shows
 const TITLE_LENGTH = 60;
 
-// --user <login>: the GitHub account this runs for
-// --org <owner>: only what's in this owner's repositories (repeatable)
-// set provider ...: what the trays find each other through, kept in
-//   config.json for every run after - set provider none, and it's on its own
-const USAGE = `usage: ${appName} --user <github login> [--org <owner>]...
+// Run with nothing, it's the tray. Every setting is kept in config.json, set
+// with set - each refused while the tray runs, since it'd be written over:
+// set user <login>: the GitHub account it runs for
+// set org add <owner> | remove <owner> | clear: only what's in these owners'
+//   repositories - none, and everything
+// set provider ...: what the trays find each other through - none, and it's
+//   on its own
+const USAGE = `usage: ${appName}
+       ${appName} set user <github login>
+       ${appName} set org add <owner> | remove <owner> | clear
        ${appName} set provider none
 ${providerUsage(`${appName} set`, '       ')}`;
-const { values: args, positionals } = parseArgs({
-  allowPositionals: true,
-  options: { user: { type: 'string' }, org: { type: 'string', multiple: true } },
-});
-// the provider set provider gives - null for none
-let setProvider: ProviderSettings | null | undefined;
+
+// what a set command changes in the config
+type Setting =
+  | { user: string }
+  | { org: { add: string } | { remove: string } | 'clear' }
+  | { provider: ProviderSettings | null };
+
+let setting: Setting | undefined;
 try {
+  // what were options are settings now
+  for (const [option, instead] of [['--user', 'set user <github login>'], ['--org', 'set org add <owner>']]) {
+    if (process.argv.slice(2).some(arg => arg === option || arg.startsWith(`${option}=`)))
+      throw new Error(`${option} is a setting now: ${appName} ${instead}, once`);
+  }
+  const { positionals } = parseArgs({ allowPositionals: true, options: {} });
   if (positionals.length) {
-    const [command, setting, ...rest] = positionals;
-    if (command !== 'set' || setting !== 'provider') throw new Error(`no command ${positionals.join(' ')}`);
-    setProvider = rest[0] === 'none' && rest.length === 1 ? null : parseProvider(rest, to => path.resolve(to));
-  } else if (!args.user) throw new Error('--user is needed');
+    const [command, name, ...rest] = positionals;
+    if (command !== 'set') throw new Error(`no command ${positionals.join(' ')}`);
+    if (name === 'user') {
+      if (rest.length !== 1 || !rest[0].trim()) throw new Error('set user takes a GitHub login');
+      setting = { user: rest[0].trim() };
+    } else if (name === 'org') {
+      const [action, owner, extra] = rest;
+      if (action === 'clear' && owner === undefined) setting = { org: 'clear' };
+      else if ((action === 'add' || action === 'remove') && owner?.trim() && extra === undefined)
+        setting = { org: action === 'add' ? { add: owner.trim().toLowerCase() } : { remove: owner.trim().toLowerCase() } };
+      else throw new Error('set org takes add <owner>, remove <owner> or clear');
+    } else if (name === 'provider') {
+      setting = { provider: rest[0] === 'none' && rest.length === 1 ? null : parseProvider(rest, to => path.resolve(to)) };
+    } else throw new Error(`there's no setting ${name ?? ''}`.trim());
+  }
 } catch (error) {
   console.error(`${firstLine(error)}\n\n${USAGE}`);
   process.exit(2);
 }
-const user = args.user ?? '';
-const orgs = (args.org ?? []).map(org => org.toLowerCase());
 
 // the app's own host, named after the package - running this again joins the
 // one that's already up rather than starting another
@@ -82,8 +104,8 @@ const host = await UIHost.create({ app: pkg.name });
 // and a setting would be written over by it, so it isn't changed
 if (!host.params.hasSingleInstanceLock) {
   host.dispose();
-  if (setProvider !== undefined) {
-    console.error(`${appName} is running - quit it first to change its provider`);
+  if (setting !== undefined) {
+    console.error(`${appName} is running - quit it first to change its settings`);
     process.exit(1);
   }
   process.exit(0);
@@ -94,15 +116,15 @@ const log = createLog(host.params.userData);
 
 // GitHub, asked conditionally - what it last answered is kept in userData,
 // this machine's own business
-const github = new GitHub(path.join(host.params.userData, 'github-cache.json'), appName);
-await github.load();
-const inbox = new Inbox(github, user, orgs);
-
 // this machine's own settings, in userData - and, beside them, what the last
 // refresh cost and where GitHub's rate limit stood after it
 type Config = {
   // this machine, as the other trays know it
   deviceId: string;
+  // the GitHub account it runs for, and the owners whose repositories it
+  // looks in - all of them, with none
+  user?: string;
+  orgs: string[];
   // what the trays find each other through - none, and it's on its own
   provider?: ProviderSettings;
   autoMarkDone: boolean;
@@ -112,6 +134,7 @@ type Config = {
 const configFile = path.join(host.params.userData, 'config.json');
 const config: Config = {
   deviceId: crypto.randomUUID(),
+  orgs: [],
   autoMarkDone: false,
   ...JSON.parse(await fs.promises.readFile(configFile, 'utf8').catch(() => '{}')) as Partial<Config>,
 };
@@ -122,15 +145,40 @@ if (share) {
   config.provider ??= { kind: 'folder', path: share.path };
   delete (config as { share?: unknown }).share;
 }
-if (setProvider !== undefined) {
-  config.provider = setProvider ?? undefined;
+if (setting !== undefined) {
+  if ('user' in setting) {
+    config.user = setting.user;
+    console.log(`running for ${config.user}`);
+  } else if ('org' in setting) {
+    const { org } = setting;
+    config.orgs = org === 'clear' ? []
+      : 'add' in org ? [...new Set([...config.orgs, org.add])]
+        : config.orgs.filter(each => each !== org.remove);
+    console.log(config.orgs.length ? `only in ${config.orgs.join(', ')}` : 'in every owner\'s repositories');
+  } else {
+    config.provider = setting.provider ?? undefined;
+    console.log(config.provider ? `sharing through ${providerLabel(config.provider)}` : 'not sharing');
+  }
   await saveConfig();
-  console.log(config.provider ? `sharing through ${providerLabel(config.provider)}` : 'not sharing');
   host.dispose();
   process.exit(0);
 }
+// the account it runs for has to be set before it can run at all
+if (!config.user) {
+  console.error(`set the GitHub account first: ${appName} set user <github login>`);
+  host.dispose();
+  process.exit(2);
+}
+const user = config.user;
+const orgs = config.orgs;
 await saveConfig();
 log(config.provider ? `started, sharing through ${providerLabel(config.provider)}` : 'started, not sharing');
+
+// GitHub, asked conditionally - what it last answered is kept in userData,
+// this machine's own business
+const github = new GitHub(path.join(host.params.userData, 'github-cache.json'), appName);
+await github.load();
+const inbox = new Inbox(github, user, orgs);
 
 // this user's items, served to the other trays - what was there last time
 // until the first scan
@@ -710,9 +758,9 @@ function single(what: string, open: () => Promise<RemoteWindow>) {
 const showLog = single('the log', () => host.open(logViewer, { file: logFile(host.params.userData), title: `${appName} log` }));
 // everyone's items
 const showApprovals = single('approvals', () => host.open(approvalsWindow, { store: devices, title: appName }));
-// scripts that start the tray as this one was started - its provider set,
-// then its account and owners - from npm or the repo, the repo's root build
-// script building it
+// scripts that start the tray as this one was started - its provider,
+// account and owners set, then the tray - from npm or the repo, the repo's
+// root build script building it
 const showShortcuts = single('shortcuts', () => host.open(shortcutsWindow, {
   title: `${appName} shortcuts`,
   settings: {
@@ -721,8 +769,12 @@ const showShortcuts = single('shortcuts', () => host.open(shortcutsWindow, {
     repo: repoSpec(pkg.repository) ?? pkg.name,
     build: 'build',
     platform: platformOf(process.platform),
-    set: ['set', 'provider', ...config.provider ? providerArgs(config.provider) : ['none']],
-    run: ['--user', user, ...(args.org ?? []).flatMap(org => ['--org', org])],
+    setup: [
+      ['set', 'provider', ...config.provider ? providerArgs(config.provider) : ['none']],
+      ['set', 'user', user],
+      ['set', 'org', 'clear'],
+      ...orgs.map(org => ['set', 'org', 'add', org]),
+    ],
   },
 }));
 
