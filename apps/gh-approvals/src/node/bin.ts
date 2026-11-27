@@ -69,11 +69,6 @@ type Setting =
 
 let setting: Setting | undefined;
 try {
-  // what were options are settings now
-  for (const [option, instead] of [['--user', 'set user <github login>'], ['--org', 'set org add <owner>']]) {
-    if (process.argv.slice(2).some(arg => arg === option || arg.startsWith(`${option}=`)))
-      throw new Error(`${option} is a setting now: ${appName} ${instead}, once`);
-  }
   const { positionals } = parseArgs({ allowPositionals: true, options: {} });
   if (positionals.length) {
     const [command, name, ...rest] = positionals;
@@ -139,12 +134,6 @@ const config: Config = {
   ...JSON.parse(await fs.promises.readFile(configFile, 'utf8').catch(() => '{}')) as Partial<Config>,
 };
 const saveConfig = () => writeAtomic(configFile, `${JSON.stringify(config, null, 2)}\n`);
-// a share from before providers is a folder provider
-const { share } = config as { share?: { path: string } };
-if (share) {
-  config.provider ??= { kind: 'folder', path: share.path };
-  delete (config as { share?: unknown }).share;
-}
 if (setting !== undefined) {
   if ('user' in setting) {
     config.user = setting.user;
