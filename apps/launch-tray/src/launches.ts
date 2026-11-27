@@ -20,7 +20,7 @@ export const keptFile = (userData: string, name: string) => path.join(launchesFo
 export function keep(userData: string, launch: Launch) {
   const file = keptFile(userData, launch.name);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify({ name: launch.name, commands: launch.commands }, null, 2)}\n`);
+  fs.writeFileSync(file, `${JSON.stringify({ name: launch.name, sources: launch.sources, commands: launch.commands }, null, 2)}\n`);
   return { ...launch, file };
 }
 
