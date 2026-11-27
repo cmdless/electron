@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { getMetaPackageVersion, validCmdlessAppName } from '@cmdless/core/node';
+import { getMetaPackageVersion, resolvePackageBin, validCmdlessAppName } from '@cmdless/core/node';
 
 const APP_KEY = 'CMDLESS_APP';
 const URL_KEY = 'CMDLESS_URL';
@@ -12,6 +12,8 @@ export function getEphemeralPrefix() {
 export { getTmpSocketPath, listenOnce, sendTo, resolveService, rejectService } from '@cmdless/core/node';
 // what @cmdless/ui's package command runs with
 export { runAsPackage } from '@cmdless/core/node';
+// what ui-runtime's launch commands set up and pass on with
+export { acquireLock, getCmdlessRoot, resolveNewestPackageBin } from '@cmdless/core/node';
 
 // the setters below write to this process's env by default, or - given an
 // env to spawn with - only to a child's; an empty value removes the key.
@@ -51,6 +53,13 @@ const EPHEMERAL_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 // a throwaway app's name: the prefix, then the id it was made with - and
 // nothing else
+// ui-runtime's bin, at the version this package speaks: the local install
+// when it's that version, or else that version installed into the cmdless
+// root
+export async function resolveRuntimeBin(cmdlessRoot?: string) {
+  return resolvePackageBin(import.meta, '@cmdless/ui-runtime', await getCmdlessUIVersion(), cmdlessRoot);
+}
+
 export function isEphemeralCmdlessApp(appName: string) {
   const prefix = getEphemeralPrefix();
   return appName.startsWith(prefix) && EPHEMERAL_ID.test(appName.slice(prefix.length));
