@@ -116,7 +116,7 @@ async function main() {
   const host = await Host.start({ appName, userData, ephemeral }, ready);
   // the host lives as long as its owner's connection
   void host.ownerClosed.then(quit);
-  // a Dock icon only while a window or dialog is open - changed only when
+  // a Dock icon only while a window is open - changed only when
   // that flips, since show() settles later and a stray one would undo a hide
   let docked = false;
   host.onHandlesChanged(count => {
