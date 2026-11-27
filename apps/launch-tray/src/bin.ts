@@ -82,25 +82,28 @@ async function approve(launch: Launch, action: 'add' | 'open') {
 // the kept launch that's just so, if there is one
 const keptAs = (launch: Launch) => kept.find(each => sameLaunch(each, launch));
 
-async function add(launch: Launch): Promise<AddResult> {
-  if (keptAs(launch)) return 'unchanged';
-  const { approved, replacing } = await approve(launch, 'add');
-  if (!approved) return 'cancelled';
-  keep(host.params.userData, launch);
-  log(`${replacing ? 'replaced' : 'added'} ${launch.name}`);
+// A launch not kept just so, kept: shown first, or - asked for without
+// confirming - kept at once, and said so. Nothing, if it was turned down.
+async function keepNew(launch: Launch, action: 'add' | 'open', confirm: boolean) {
+  const replacing = fs.existsSync(keptFile(host.params.userData, launch.name));
+  if (confirm && !(await approve(launch, action)).approved) return undefined;
+  const found = keep(host.params.userData, launch);
+  log(`${replacing ? 'replaced' : 'added'} ${launch.name}${confirm ? '' : ', unasked'}`);
   refreshMenu();
-  return replacing ? 'replaced' : 'added';
+  if (!confirm) await notify(`${launch.name} ${replacing ? 'replaced' : 'added'}`, `It's under Launch in ${TITLE}.`);
+  return { found, replacing };
 }
 
-async function open(launch: Launch): Promise<OpenResult> {
-  let found = keptAs(launch);
-  if (!found) {
-    const { approved, replacing } = await approve(launch, 'open');
-    if (!approved) return 'cancelled';
-    found = keep(host.params.userData, launch);
-    log(`${replacing ? 'replaced' : 'added'} ${launch.name}, to open`);
-    refreshMenu();
-  }
+async function add(launch: Launch, confirm: boolean): Promise<AddResult> {
+  if (keptAs(launch)) return 'unchanged';
+  const kept = await keepNew(launch, 'add', confirm);
+  if (!kept) return 'cancelled';
+  return kept.replacing ? 'replaced' : 'added';
+}
+
+async function open(launch: Launch, confirm: boolean): Promise<OpenResult> {
+  const found = keptAs(launch) ?? (await keepNew(launch, 'open', confirm))?.found;
+  if (!found) return 'cancelled';
   void run(found);
   return 'opened';
 }
@@ -122,13 +125,13 @@ async function main() {
   let started!: () => void;
   const ready = new Promise<void>(resolve => started = resolve);
   const lock = createSocketServer(launchProtocol.accept(server => {
-    server.onRequest.add(async ({ launch }) => {
+    server.onRequest.add(async ({ launch, confirm = true }) => {
       await ready;
-      return add(validLaunch(launch));
+      return add(validLaunch(launch), confirm !== false);
     });
-    server.onRequest.open(async ({ launch }) => {
+    server.onRequest.open(async ({ launch, confirm = true }) => {
       await ready;
-      return open(validLaunch(launch));
+      return open(validLaunch(launch), confirm !== false);
     });
   }));
   const service: DaemonService = { address: getLaunchSocketPath() };
