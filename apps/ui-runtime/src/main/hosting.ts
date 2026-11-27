@@ -377,10 +377,18 @@ export class DialogHandle extends UIHandle {
     super(owner);
     const { type, message, detail, buttons, defaultId, cancelId, checkboxLabel, checkboxChecked } = params;
     const options = { type, message, detail, buttons, defaultId, cancelId, checkboxLabel, checkboxChecked, signal: this.dismissed.signal };
-    // with no Dock icon until now, the app isn't the active one - without
-    // this, a dialog with no window to sit on opens behind whatever is
-    if (!parent) app.focus({ steal: true });
-    const shown = parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+    // With no Dock icon until now, the app isn't the active one, and a dialog
+    // with no window to sit on would open behind whatever is. macOS won't
+    // bring forward an app whose Dock icon isn't up yet - it bounces it
+    // instead - so the icon (which this dialog has just asked for) is waited
+    // on first.
+    const shown = (async () => {
+      if (!parent) {
+        await app.dock?.show();
+        app.focus({ steal: true });
+      }
+      return parent ? dialog.showMessageBox(parent, options) : dialog.showMessageBox(options);
+    })();
     this.modal = process.platform === 'darwin' && !parent;
     if (this.modal) {
       DialogHandle.modal++;

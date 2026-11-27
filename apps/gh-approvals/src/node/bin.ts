@@ -832,15 +832,14 @@ const showLog = single('the log', () => host.open(logViewer, { file: logFile(hos
 // everyone's items
 const showApprovals = single('approvals', () => host.open(approvalsWindow, { store: devices, title: appName }));
 // a shortcut to this tray, with its team settings, kept in the launch tray -
-// which shows what it runs, and keeps it only if that's OK
+// at once, since choosing it from the menu was the asking; the launch tray
+// says it's been added
 async function addShortcut(source: ShortcutSource) {
   const launch = shortcut({
     appName, packageName: pkg.name, repo: repoSpec(pkg.repository) ?? pkg.name, provider: config.provider, orgs,
   }, source);
   try {
-    const result = await LaunchHost.add(launch);
-    log(`shortcut ${launch.name}: ${result}`);
-    if (result === 'added' || result === 'replaced') await host.showNotification({ title: `${launch.name} added`, body: 'It\'s under Launch in the cmdless launch tray.' });
+    log(`shortcut ${launch.name}: ${await LaunchHost.add(launch, { confirm: false })}`);
   } catch (error) {
     log(`couldn't add shortcut ${launch.name}: ${firstLine(error)}`);
   }

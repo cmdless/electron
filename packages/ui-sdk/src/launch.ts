@@ -55,6 +55,12 @@ export type AddResult = 'added' | 'replaced' | 'unchanged' | 'cancelled';
 // about - or turned down
 export type OpenResult = 'opened' | 'cancelled';
 
+// how a launch is asked for. confirm (the default) shows it, with what it
+// runs, before it's kept; false keeps it at once, with a notification - for
+// code already running as the user, who asked for it some other way. A
+// launch from a file is always shown.
+export type LaunchParams = { launch: Launch; confirm?: boolean };
+
 // what @cmdless/launch-tray serves: one tray per user, on a socket
 export const launchProtocol = defineProtocol(({ side, request }) => ({
   // bump only for a change that breaks clients - adding things doesn't
@@ -63,10 +69,10 @@ export const launchProtocol = defineProtocol(({ side, request }) => ({
   clientToServer: side({
     requests: {
       // keeps a launch - asking first, unless it's kept just so already
-      add: request<{ launch: Launch }, AddResult>('launch/add'),
+      add: request<LaunchParams, AddResult>('launch/add'),
       // runs a launch - kept just so, at once; otherwise asked about, and
       // kept, first. Settles once it's running, not once it's done.
-      open: request<{ launch: Launch }, OpenResult>('launch/open'),
+      open: request<LaunchParams, OpenResult>('launch/open'),
     },
   }),
 }));

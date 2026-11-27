@@ -24,6 +24,9 @@ async function connectLaunch(address = getLaunchSocketPath()) {
 
 export type LaunchHostOptions = { cmdlessRoot?: string };
 
+// whether to show it before keeping it (LaunchParams' confirm)
+export type LaunchOptions = { confirm?: boolean };
+
 // A connection to @cmdless/launch-tray - the running one, or one started for
 // it: the newest version already cached, or the latest from npm when there's
 // none. Nothing updates what's cached.
@@ -35,15 +38,16 @@ export class LaunchHost {
     return new LaunchHost(await connectOrStart(connectLaunch, binPath));
   }
 
-  // keeps a launch, asking first unless it's kept just so already
-  add(launch: Launch) {
-    return this.client.request.add({ launch });
+  // keeps a launch, asking first unless it's kept just so already - or
+  // without asking, with confirm false
+  add(launch: Launch, { confirm }: LaunchOptions = {}) {
+    return this.client.request.add({ launch, confirm });
   }
 
   // runs a launch, asking about it and keeping it first unless it's kept
-  // just so already - settling once it's running
-  open(launch: Launch) {
-    return this.client.request.open({ launch });
+  // just so already (or confirm is false) - settling once it's running
+  open(launch: Launch, { confirm }: LaunchOptions = {}) {
+    return this.client.request.open({ launch, confirm });
   }
 
   dispose() {
@@ -51,19 +55,19 @@ export class LaunchHost {
   }
 
   // the one-shots: connect, ask, leave
-  static async add(launch: Launch, options?: LaunchHostOptions) {
+  static async add(launch: Launch, options: LaunchHostOptions & LaunchOptions = {}) {
     const host = await LaunchHost.create(options);
     try {
-      return await host.add(launch);
+      return await host.add(launch, options);
     } finally {
       host.dispose();
     }
   }
 
-  static async open(launch: Launch, options?: LaunchHostOptions) {
+  static async open(launch: Launch, options: LaunchHostOptions & LaunchOptions = {}) {
     const host = await LaunchHost.create(options);
     try {
-      return await host.open(launch);
+      return await host.open(launch, options);
     } finally {
       host.dispose();
     }

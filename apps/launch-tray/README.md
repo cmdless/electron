@@ -11,6 +11,8 @@ It takes no arguments: started while one's already running, it finds the socket 
 - **add** — keeps a launch. The same launch kept already (the same name, running the same commands) is `unchanged`; anything else is shown first, with exactly what it runs, and kept only on **Add** (or **Replace**, for a name that's kept already).
 - **open** — runs a launch. The same launch kept already runs at once; anything else is asked about — **Open “…”?**, with what it runs — and kept, then run, so it runs without asking next time.
 
+Asked with `confirm: false` — by code already running as you, which could keep a launch itself anyway — either keeps it without asking, and says so in a notification. A launch from a file (a double-click, or `ui launch`) is always asked about.
+
 Trust goes by what a launch runs, not where it came from: a launch whose commands changed is asked about again. **Launch ›** in the tray lists the kept launches; choosing one runs it. **Update available** shows when npm has a newer version — nothing is ever updated by itself.
 
 Its socket comes up before its tray: a client connects at once, and what it asks waits for the tray's host to start.
