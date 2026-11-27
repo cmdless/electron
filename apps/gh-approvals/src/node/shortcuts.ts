@@ -1,20 +1,19 @@
-// Shortcuts: launches (see @cmdless/ui-sdk's Launch) that start the tray
+// The shortcut: a launch (see @cmdless/ui-sdk's Launch) that starts the tray
 // with this one's team settings - its provider and owners, never its user,
-// whom each person picks for themselves - from npm, or from the repo through
-// gx, which builds it once per commit. Every set in one changes nothing when
-// it's run again, so running it while the tray's up just brings that up.
+// whom each person picks for themselves - with a command for each source: npm,
+// or the repo itself through gx, which builds it once per commit. Every set in
+// it changes nothing when it's run again, so running it while the tray's up
+// just brings that up.
 
-import type { Launch } from '@cmdless/ui-sdk';
+import type { Launch, LaunchCommand } from '@cmdless/ui-sdk';
 import { providerArgs } from '@cmdless/rtc-sdk/node';
 import type { ProviderSettings } from '@cmdless/rtc-sdk/node';
-
-export type ShortcutSource = 'npm' | 'gx';
 
 export type ShortcutSettings = {
   appName: string;
   packageName: string;
-  // the repo, as gx takes it
-  repo: string;
+  // the repo it's in, as gx takes it - none if the package doesn't say
+  repo?: string;
   provider?: ProviderSettings;
   orgs: string[];
 };
@@ -28,17 +27,19 @@ export function repoSpec(repository: string | { url?: string } | undefined) {
   return github ? `github:${github[1]}/${github[2]}` : url;
 }
 
-export function shortcut({ appName, packageName, repo, provider, orgs }: ShortcutSettings, source: ShortcutSource): Launch {
-  const base = source === 'npm'
-    ? ['-y', `${packageName}@latest`]
-    : ['-y', '@cmdless/gx', '--build', 'build', '-w', packageName, repo];
-  const npx = (...args: string[]) => ({ command: 'npx', args: [...base, ...args] });
+export function shortcut({ appName, packageName, repo, provider, orgs }: ShortcutSettings): Launch {
+  // the settings, then the tray, from one source
+  const from = (source: string): LaunchCommand[] => [
+    { source, args: ['set', 'provider', ...provider ? providerArgs(provider) : ['none']] },
+    ...orgs.map(org => ({ source, args: ['set', 'org', 'add', org] })),
+    { source, args: [] },
+  ];
   return {
-    name: `${appName} (${source === 'npm' ? 'npm' : 'GitHub'})`,
-    commands: [
-      npx('set', 'provider', ...provider ? providerArgs(provider) : ['none']),
-      ...orgs.map(org => npx('set', 'org', 'add', org)),
-      npx(),
-    ],
+    name: appName,
+    sources: {
+      npm: { type: 'npm', package: packageName },
+      ...repo && { github: { type: 'git', repo, workspace: packageName, build: ['build'] } },
+    },
+    commands: { npm: from('npm'), ...repo && { GitHub: from('github') } },
   };
 }
