@@ -1,82 +1,40 @@
 #!/usr/bin/env node
 
-// launch-tray [add <file> | open <file>]
-//
-// The tray .cmdless files open through (ui-runtime's launcher passes them
-// here). The first run is the tray; any run after it hands its file to that
-// one and exits. add keeps a file among the launches, once it's been
-// trusted; open runs a kept one at once, and asks to keep one from anywhere
-// else first.
+// The launch tray: one per user, serving launchProtocol on its socket -
+// LaunchHost (in @cmdless/ui-sdk) connects to it, starting it if it isn't
+// up. It keeps the launches that have been trusted and runs them: one asked
+// to be added or opened is shown, with what it runs, unless the same launch
+// is kept already.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { compareVersions } from '@cmdless/core/node';
-import { UIHost } from '@cmdless/ui-sdk/node';
+import { compareVersions, isPendingService, listenExclusive, rejectService, resolveService } from '@cmdless/core/node';
+import type { DaemonService } from '@cmdless/core/node';
+import { createSocketServer } from '@cmdless/rpc-sdk/node';
+import { describeLaunch, launchProtocol, sameLaunch, validLaunch } from '@cmdless/ui-sdk';
+import type { AddResult, Launch, OpenResult } from '@cmdless/ui-sdk';
+import { getLaunchSocketPath, UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteTray, TrayMenuItem } from '@cmdless/ui-sdk/node';
-import { describeLaunch, isKept, keptFileName, keptLaunches, launchesFolder, readLaunch } from './launches.js';
-import type { KeptLaunch, Launch } from './launches.js';
+import { keep, keptFile, keptLaunches, launchesFolder } from './launches.js';
+import type { KeptLaunch } from './launches.js';
 import { logFileFor, runLaunch } from './run.js';
 
 const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string; version: string };
 const TITLE = 'cmdless launch';
 
-type Request = { type: 'add' | 'open'; file: string };
-
-const isRequest = (value: unknown): value is Request =>
-  !!value && typeof value === 'object'
-  && ((value as Request).type === 'add' || (value as Request).type === 'open')
-  && typeof (value as Request).file === 'string';
-
-// what this run was asked: add or open a file, or nothing (just the tray)
-function parse(args: string[]): Request | undefined {
-  const [type, file, extra] = args;
-  if (type === undefined) return undefined;
-  if ((type !== 'add' && type !== 'open') || file === undefined || extra !== undefined) {
-    console.error('usage: launch-tray [add <file> | open <file>]');
-    process.exit(2);
-  }
-  return { type, file: path.resolve(file) };
-}
-
-const request = parse(process.argv.slice(2));
-
-let userData = '';
-let tray: RemoteTray | undefined;
+let host: UIHost;
+let tray: RemoteTray;
 let kept: KeptLaunch[] = [];
 let update: string | undefined;
 
 // what the tray did - it has no terminal to say it in
 function log(message: string) {
-  fs.appendFileSync(path.join(userData, 'launch-tray.log'), `${new Date().toISOString()} ${message}\n`);
+  fs.appendFileSync(path.join(host.params.userData, 'launch-tray.log'), `${new Date().toISOString()} ${message}\n`);
 }
 
-const host = await UIHost.create({
-  app: pkg.name,
-  // the tray, and hearing other runs, before any other run can reach this one
-  initialize: async host => {
-    if (!host.params.hasSingleInstanceLock) return;
-    userData = host.params.userData;
-    host.onMessage(({ message }) => {
-      if (isRequest(message)) void handle(message);
-    });
-    fs.mkdirSync(launchesFolder(userData), { recursive: true });
-    kept = readKept(userData);
-    tray = await host.createTray({ icon: '', tooltip: TITLE, menu: menu() });
-  },
-});
-
-// another run is the tray: it gets this one's file, and this one's done
-if (!host.params.hasSingleInstanceLock) {
-  if (request) await host.send(request);
-  host.dispose();
-  process.exit(0);
-}
-
-function readKept(folder: string) {
-  return keptLaunches(folder, (file, error) => log(`skipped ${file}: ${error.message}`));
-}
+const readKept = () => keptLaunches(host.params.userData, (file, error) => log(`skipped ${file}: ${error.message}`));
 
 // the launches, then an update if there is one, then Quit - a launch's id is
 // its place in the list as the menu was built
@@ -94,96 +52,142 @@ function menu(): TrayMenuItem[] {
 }
 
 function refreshMenu() {
-  kept = readKept(userData);
-  void tray?.update({ menu: menu() }).catch(() => { });
+  kept = readKept();
+  void tray.update({ menu: menu() }).catch(() => { });
 }
-
-// the folder changing - added to here, or by hand - changes the menu
-let refreshing: NodeJS.Timeout | undefined;
-fs.watch(launchesFolder(userData), () => {
-  clearTimeout(refreshing);
-  refreshing = setTimeout(refreshMenu, 100);
-});
-
-tray!.onEvent(event => {
-  if (event.event !== 'menu-item') return;
-  if (event.item === 'quit') {
-    host.dispose();
-    process.exit(0);
-  }
-  const index = /^launch:(\d+)$/.exec(event.item)?.[1];
-  const launch = index === undefined ? undefined : kept[Number(index)];
-  if (launch) void run(launch);
-});
 
 async function notify(title: string, body?: string) {
   await host.showNotification({ title, body }).catch(() => { });
 }
 
-// a file from anywhere, kept once it's been trusted: what it runs is shown,
-// and only Add keeps it. Hands back the kept copy, or nothing.
-async function add(file: string): Promise<KeptLaunch | undefined> {
-  let text: string;
-  let launch: Launch;
-  try {
-    text = fs.readFileSync(file, 'utf8');
-    launch = readLaunch(file);
-  } catch (error) {
-    log(`couldn't read ${file}: ${(error as Error).message}`);
-    await notify(`Couldn't open ${path.basename(file)}`, (error as Error).message);
-    return undefined;
-  }
-  if (isKept(userData, file)) return { ...launch, file };
-
-  const target = path.join(launchesFolder(userData), keptFileName(launch.name));
-  const replacing = fs.existsSync(target);
+// Shown before a launch is kept, with exactly what it runs: whether to go
+// ahead. Escape, or closing it, is Cancel.
+async function approve(launch: Launch, action: 'add' | 'open') {
+  const replacing = fs.existsSync(keptFile(host.params.userData, launch.name));
+  const verb = action === 'open' ? 'Open' : replacing ? 'Replace' : 'Add';
   const dialog = await host.openDialog({
     type: 'question',
-    message: replacing ? `Replace “${launch.name}” in ${TITLE}?` : `Add “${launch.name}” to ${TITLE}?`,
-    detail: `From ${file}\n\nIt runs:\n${describeLaunch(launch)}`,
-    buttons: [replacing ? 'Replace' : 'Add', 'Cancel'],
+    message: action === 'open' ? `Open “${launch.name}”?` : `${verb} “${launch.name}” in ${TITLE}?`,
+    detail: [
+      `It runs:\n${describeLaunch(launch)}`,
+      action === 'open' ? `\nIt'll be kept in ${TITLE}${replacing ? ', in place of the one with its name,' : ''} and run without asking next time.` : '',
+    ].join('\n'),
+    buttons: [verb, 'Cancel'],
     defaultId: 1,
     cancelId: 1,
   });
-  const { response } = await dialog.closed;
-  if (response !== 0) {
-    log(`didn't add ${file}`);
-    return undefined;
-  }
-  fs.writeFileSync(target, text);
-  log(`added ${launch.name} from ${file}`);
+  return { approved: (await dialog.closed).response === 0, replacing };
+}
+
+// the kept launch that's just so, if there is one
+const keptAs = (launch: Launch) => kept.find(each => sameLaunch(each, launch));
+
+async function add(launch: Launch): Promise<AddResult> {
+  if (keptAs(launch)) return 'unchanged';
+  const { approved, replacing } = await approve(launch, 'add');
+  if (!approved) return 'cancelled';
+  keep(host.params.userData, launch);
+  log(`${replacing ? 'replaced' : 'added'} ${launch.name}`);
   refreshMenu();
-  return { ...launch, file: target };
+  return replacing ? 'replaced' : 'added';
+}
+
+async function open(launch: Launch): Promise<OpenResult> {
+  let found = keptAs(launch);
+  if (!found) {
+    const { approved, replacing } = await approve(launch, 'open');
+    if (!approved) return 'cancelled';
+    found = keep(host.params.userData, launch);
+    log(`${replacing ? 'replaced' : 'added'} ${launch.name}, to open`);
+    refreshMenu();
+  }
+  void run(found);
+  return 'opened';
 }
 
 // a kept launch, run - saying so only if it fails
 async function run(launch: KeptLaunch) {
   log(`launching ${launch.name}`);
-  const failed = await runLaunch(launch, logFileFor(userData, launch.file));
+  const failed = await runLaunch(launch, logFileFor(host.params.userData, launch.file));
   if (failed) {
     log(`${launch.name} failed: ${failed}`);
     await notify(`${launch.name} didn't launch`, failed);
   }
 }
 
-async function handle({ type, file }: Request) {
-  try {
-    const launch = await add(file);
-    if (launch && type === 'open') await run(launch);
-  } catch (error) {
-    log(`${type} ${file} failed: ${(error as Error).message}`);
+async function main() {
+  // the socket first: it's the lock, and where LaunchHost connects. Requests
+  // wait for the tray, so a client connects at once, however long the
+  // tray's host takes to start.
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => started = resolve);
+  const lock = createSocketServer(launchProtocol.accept(server => {
+    server.onRequest.add(async ({ launch }) => {
+      await ready;
+      return add(validLaunch(launch));
+    });
+    server.onRequest.open(async ({ launch }) => {
+      await ready;
+      return open(validLaunch(launch));
+    });
+  }));
+  const service: DaemonService = { address: getLaunchSocketPath() };
+  if (!await listenExclusive(lock, service.address)) {
+    if (isPendingService()) await resolveService(service);
+    return;
   }
+  if (isPendingService()) await resolveService(service);
+
+  host = await UIHost.create({
+    app: pkg.name,
+    initialize: async host => {
+      fs.mkdirSync(launchesFolder(host.params.userData), { recursive: true });
+      tray = await host.createTray({ icon: '', tooltip: TITLE, menu: [] });
+    },
+  });
+  kept = readKept();
+  await tray.update({ menu: menu() });
+  log(`started ${pkg.version}`);
+
+  const quit = () => {
+    lock.close();
+    host.dispose();
+    process.exit(0);
+  };
+  process.on('SIGINT', quit);
+  process.on('SIGTERM', quit);
+  host.onClose(quit);
+
+  tray.onEvent(event => {
+    if (event.event !== 'menu-item') return;
+    if (event.item === 'quit') return quit();
+    const index = /^launch:(\d+)$/.exec(event.item)?.[1];
+    const launch = index === undefined ? undefined : kept[Number(index)];
+    if (launch) void run(launch);
+  });
+
+  // the folder changing - added to here, or by hand - changes the menu
+  let refreshing: NodeJS.Timeout | undefined;
+  fs.watch(launchesFolder(host.params.userData), () => {
+    clearTimeout(refreshing);
+    refreshing = setTimeout(refreshMenu, 100);
+  });
+
+  // whether there's a newer version - shown, never installed
+  void promisify(execFile)('npm', ['view', pkg.name, 'version'], { shell: process.platform === 'win32' })
+    .then(({ stdout }) => {
+      const latest = stdout.trim();
+      if (latest && compareVersions(latest, pkg.version) > 0) {
+        update = latest;
+        void tray.update({ menu: menu() }).catch(() => { });
+      }
+    }, () => { });
+
+  started();
 }
 
-// whether there's a newer version - shown, never installed
-void promisify(execFile)('npm', ['view', pkg.name, 'version'], { shell: process.platform === 'win32' })
-  .then(({ stdout }) => {
-    const latest = stdout.trim();
-    if (latest && compareVersions(latest, pkg.version) > 0) {
-      update = latest;
-      void tray?.update({ menu: menu() }).catch(() => { });
-    }
-  }, () => { });
-
-log(`started ${pkg.version}`);
-if (request) await handle(request);
+main().catch(async error => {
+  console.error(error);
+  if (isPendingService()) await rejectService(error).catch(() => { });
+  process.exit(1);
+});

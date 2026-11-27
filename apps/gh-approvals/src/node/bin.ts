@@ -5,7 +5,7 @@ import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { UIHost } from '@cmdless/ui-sdk/node';
+import { LaunchHost, UIHost } from '@cmdless/ui-sdk/node';
 import type { RemoteWindow, TrayMenuItem, TrayParams } from '@cmdless/ui-sdk/node';
 import { ghAccounts, ghInstalled, GITHUB_LOGIN, isGitHubLogin, startLogin, tokenFor } from './accounts.js';
 import { approveDeployment, approvePullRequest } from './approvals.js';
@@ -18,7 +18,7 @@ import { connect, serve, trayProtocol, userOf } from './peers.js';
 import type { SentItem, Tray, TrayInfo } from './peers.js';
 import { memory, pointer, prefixOps } from '@cmdless/rpc-sdk';
 import type { Operation } from '@cmdless/rpc-sdk';
-import { accountOf, createRtcHost, parseProvider, providerArgs, providerLabel, providerName, providerUsage, signalingFor } from '@cmdless/rtc-sdk/node';
+import { accountOf, createRtcHost, parseProvider, providerLabel, providerName, providerUsage, signalingFor } from '@cmdless/rtc-sdk/node';
 import type { ProviderSettings, RtcHost } from '@cmdless/rtc-sdk/node';
 import { ensureAuth, providerKey } from '@cmdless/auth-sdk/node';
 import type { ProviderStatus } from '@cmdless/auth-sdk/node';
@@ -26,8 +26,8 @@ import { createLog, logFile } from './log.js';
 import { coalesce, firstLine, writeAtomic } from './util.js';
 import { logViewer } from './logViewer.js';
 import { approvalsWindow } from './approvalsWindow.js';
-import { shortcutsWindow } from './shortcutsWindow.js';
-import { platformOf, repoSpec } from '../shared/shortcuts.js';
+import { repoSpec, shortcut } from './shortcuts.js';
+import type { ShortcutSource } from './shortcuts.js';
 import { approvalsProtocol } from '../shared/protocols.js';
 import type { Devices } from '../shared/protocols.js';
 
@@ -107,22 +107,6 @@ while (restarting && !host.params.hasSingleInstanceLock) {
   host = await UIHost.create({ app: pkg.name });
 }
 
-// it's already running, tray and all, so there's nothing more to do here -
-// and a setting would be written over by it, so it isn't changed
-if (!host.params.hasSingleInstanceLock) {
-  host.dispose();
-  if (setting !== undefined) {
-    console.error(`${appName} is running - quit it first to change its settings`);
-    process.exit(1);
-  }
-  process.exit(0);
-}
-
-// a log in the app's own userData
-const log = createLog(host.params.userData);
-
-// GitHub, asked conditionally - what it last answered is kept in userData,
-// this machine's own business
 // this machine's own settings, in userData - and, beside them, what the last
 // refresh cost and where GitHub's rate limit stood after it
 type Config = {
@@ -146,24 +130,50 @@ const config: Config = {
   ...JSON.parse(await fs.promises.readFile(configFile, 'utf8').catch(() => '{}')) as Partial<Config>,
 };
 const saveConfig = () => writeAtomic(configFile, `${JSON.stringify(config, null, 2)}\n`);
-if (setting !== undefined) {
+
+// a setting, applied to the config: what it now says
+function apply(setting: Setting) {
   if ('user' in setting) {
     config.user = setting.user;
-    console.log(`running for ${config.user}`);
-  } else if ('org' in setting) {
+    return `running for ${config.user}`;
+  }
+  if ('org' in setting) {
     const { org } = setting;
     config.orgs = org === 'clear' ? []
       : 'add' in org ? [...new Set([...config.orgs, org.add])]
         : config.orgs.filter(each => each !== org.remove);
-    console.log(config.orgs.length ? `only in ${config.orgs.join(', ')}` : 'in every owner\'s repositories');
-  } else {
-    config.provider = setting.provider ?? undefined;
-    console.log(config.provider ? `sharing through ${providerLabel(config.provider)}` : 'not sharing');
+    return config.orgs.length ? `only in ${config.orgs.join(', ')}` : 'in every owner\'s repositories';
   }
+  config.provider = setting.provider ?? undefined;
+  return config.provider ? `sharing through ${providerLabel(config.provider)}` : 'not sharing';
+}
+
+// Already running, tray and all, so there's nothing more to do here. A
+// setting would be written over by it, so one that changes anything is
+// refused - one that changes nothing is fine, so a shortcut run again
+// just brings the tray up.
+if (!host.params.hasSingleInstanceLock) {
+  host.dispose();
+  if (setting !== undefined) {
+    const before = JSON.stringify(config);
+    const now = apply(setting);
+    if (JSON.stringify(config) !== before) {
+      console.error(`${appName} is running - quit it first to change its settings`);
+      process.exit(1);
+    }
+    console.log(now);
+  }
+  process.exit(0);
+}
+if (setting !== undefined) {
+  console.log(apply(setting));
   await saveConfig();
   host.dispose();
   process.exit(0);
 }
+
+// a log in the app's own userData
+const log = createLog(host.params.userData);
 // the account it runs for - none until one's chosen, and until then it only
 // offers to choose
 const user = config.user ?? '';
@@ -372,7 +382,12 @@ function menu(): TrayMenuItem[] {
           { id: 'notifications', label: 'GitHub Notifications...' },
           { id: 'approvals', label: 'Approval UI...' },
           { id: 'log-viewer', label: 'Log Viewer...' },
-          { id: 'shortcuts', label: 'Show Shortcuts...' },
+          {
+            type: 'submenu', label: 'Add Shortcut', submenu: [
+              { id: 'shortcut:npm', label: 'npm' },
+              { id: 'shortcut:gx', label: 'GitHub (gx)' },
+            ],
+          },
           { type: 'separator' },
           { type: 'checkbox', id: 'auto-mark-done', label: 'Automatically Mark as Done', checked: config.autoMarkDone },
           // the provider's account, while it's signed in
@@ -816,25 +831,20 @@ function single(what: string, open: () => Promise<RemoteWindow>) {
 const showLog = single('the log', () => host.open(logViewer, { file: logFile(host.params.userData), title: `${appName} log` }));
 // everyone's items
 const showApprovals = single('approvals', () => host.open(approvalsWindow, { store: devices, title: appName }));
-// scripts that start the tray as this one was started - its provider,
-// account and owners set, then the tray - from npm or the repo, the repo's
-// root build script building it
-const showShortcuts = single('shortcuts', () => host.open(shortcutsWindow, {
-  title: `${appName} shortcuts`,
-  settings: {
-    app: appName,
-    packageName: pkg.name,
-    repo: repoSpec(pkg.repository) ?? pkg.name,
-    build: 'build',
-    platform: platformOf(process.platform),
-    setup: [
-      ['set', 'provider', ...config.provider ? providerArgs(config.provider) : ['none']],
-      ['set', 'user', user],
-      ['set', 'org', 'clear'],
-      ...orgs.map(org => ['set', 'org', 'add', org]),
-    ],
-  },
-}));
+// a shortcut to this tray, with its team settings, kept in the launch tray -
+// which shows what it runs, and keeps it only if that's OK
+async function addShortcut(source: ShortcutSource) {
+  const launch = shortcut({
+    appName, packageName: pkg.name, repo: repoSpec(pkg.repository) ?? pkg.name, provider: config.provider, orgs,
+  }, source);
+  try {
+    const result = await LaunchHost.add(launch);
+    log(`shortcut ${launch.name}: ${result}`);
+    if (result === 'added' || result === 'replaced') await host.showNotification({ title: `${launch.name} added`, body: 'It\'s under Launch in the cmdless launch tray.' });
+  } catch (error) {
+    log(`couldn't add shortcut ${launch.name}: ${firstLine(error)}`);
+  }
+}
 
 tray.onEvent(event => {
   if (event.event !== 'menu-item') return;
@@ -851,7 +861,7 @@ tray.onEvent(event => {
   if (item === 'auto-mark-done') return void toggleAutoMarkDone();
   if (item === 'log-viewer') return void showLog();
   if (item === 'approvals') return void showApprovals();
-  if (item === 'shortcuts') return void showShortcuts();
+  if (item === 'shortcut:npm' || item === 'shortcut:gx') return void addShortcut(item.slice('shortcut:'.length) as ShortcutSource);
   if (item === 'provider-login') return void providerLogin();
   if (item === 'provider-logout') return void operation(providerLogout);
   if (item === 'login-as') return void loginAs();

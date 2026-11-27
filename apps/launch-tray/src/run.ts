@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import type { Launch } from './launches.js';
+import type { Launch } from '@cmdless/ui-sdk';
 
 export const logsFolder = (userData: string) => path.join(userData, 'logs');
 export const logFileFor = (userData: string, launchFile: string) =>

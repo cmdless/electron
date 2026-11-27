@@ -8,7 +8,8 @@ import { Command } from 'commander';
 import { ensureElectron, getDefaultCmdlessRoot } from '@cmdless/ensure-electron';
 import { getCmdlessApp, isEphemeralCmdlessApp } from '@cmdless/ui-sdk/node';
 import { appExecutable } from './platform.js';
-import { ensureLauncher, forward, launchRoot, logLaunch } from './launch.js';
+import { LaunchHost } from '@cmdless/ui-sdk/node';
+import { ensureLauncher, launchRoot, logLaunch, readLaunch } from './launch.js';
 import pkg from "../../package.json" with { type: "json" };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -56,7 +57,7 @@ program
   });
 
 // .cmdless files: install sets up the shim that opens them through this
-// bin; add and open make sure it's there, then pass a file on to
+// bin; add and open make sure it's there, then hand a file's launch to
 // @cmdless/launch-tray
 const launch = program.command('launch').description('Open .cmdless files through @cmdless/launch-tray');
 
@@ -72,7 +73,8 @@ launch
   .argument('<file>', 'The .cmdless file')
   .action(async (file: string) => {
     await ensureLauncher(pkg.version);
-    await forward('add', file);
+    const launch = readLaunch(file);
+    console.log(`${launch.name}: ${await LaunchHost.add(launch)}`);
   });
 
 // run by the shim, with nowhere to show output - what happens goes to the
@@ -83,8 +85,8 @@ launch
   .action(async (file: string) => {
     try {
       await ensureLauncher(pkg.version);
-      await forward('open', file);
-      logLaunch(`open ${file}`);
+      const launch = readLaunch(file);
+      logLaunch(`open ${file}: ${await LaunchHost.open(launch)}`);
     } catch (error) {
       logLaunch(`open ${file} failed: ${(error as Error).message}`);
       process.exitCode = 1;

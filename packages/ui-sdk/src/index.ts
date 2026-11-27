@@ -3,6 +3,7 @@ import type { AdaptiveCard, CardEvent, CardView, FormView } from './types.js';
 
 export * as types from './types.js';
 export * from './prompts.js';
+export * from './launch.js';
 
 type ResolveParams<T = unknown> = {
   value: T;

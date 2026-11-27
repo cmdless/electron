@@ -16,6 +16,9 @@
       "path": "../../packages/core"
     },
     {
+      "path": "../../packages/rpc-sdk"
+    },
+    {
       "path": "../../packages/ui-sdk"
     }
   ]

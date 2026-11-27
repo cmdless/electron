@@ -1,19 +1,21 @@
 # @cmdless/launch-tray
 
-The tray `.cmdless` files open through. [ui-runtime's launcher](../ui-runtime#the-launcher) passes each file it's given here; this keeps the ones you've trusted, and runs them.
+The tray that keeps and runs launches — what `.cmdless` files hold. One runs per user, serving `launchProtocol` on its socket; [`LaunchHost`](../../packages/ui-sdk) connects to it, starting it if it isn't up, and [ui-runtime's launcher](../ui-runtime#the-launcher) uses that for every `.cmdless` file opened or added.
 
 ```
-launch-tray [add <file> | open <file>]
+launch-tray
 ```
 
-The first run is the tray, under its own app name (`@cmdless/launch-tray`); any run after it hands its file to the running one and exits. The tray takes no file until it's set itself up, so nothing handed to it is missed.
+It takes no arguments: started while one's already running, it finds the socket taken and exits.
 
-- `add <file>` — keep a launch. One from outside the tray's own folder is shown first, with exactly what it runs, and kept only if you choose **Add** (or **Replace**, for a name that's already kept).
-- `open <file>` — run one. A kept launch runs at once; any other is asked about as `add` would, and runs once it's kept.
+- **add** — keeps a launch. The same launch kept already (the same name, running the same commands) is `unchanged`; anything else is shown first, with exactly what it runs, and kept only on **Add** (or **Replace**, for a name that's kept already).
+- **open** — runs a launch. The same launch kept already runs at once; anything else is asked about — **Open “…”?**, with what it runs — and kept, then run, so it runs without asking next time.
 
-**Launch ›** in the tray lists the kept launches; choosing one runs it. **Update available** shows when npm has a newer version — nothing is ever updated by itself.
+Trust goes by what a launch runs, not where it came from: a launch whose commands changed is asked about again. **Launch ›** in the tray lists the kept launches; choosing one runs it. **Update available** shows when npm has a newer version — nothing is ever updated by itself.
 
-## .cmdless files
+Its socket comes up before its tray: a client connects at once, and what it asks waits for the tray's host to start.
+
+## Launches
 
 JSON: a name, and the commands that launch it, run in order.
 
@@ -21,7 +23,7 @@ JSON: a name, and the commands that launch it, run in order.
 {
   "name": "gh-approvals",
   "commands": [
-    { "command": "npx", "args": ["-y", "@cmdless/gh-approvals@latest", "--background"] }
+    { "command": "npx", "args": ["-y", "@cmdless/gh-approvals@latest"] }
   ]
 }
 ```

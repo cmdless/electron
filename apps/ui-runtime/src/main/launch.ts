@@ -1,13 +1,13 @@
 // The launcher: .cmdless files, opened from Finder (or wherever the platform
 // opens files from), run through this runtime's own bin - `launch open` - by
 // way of a shim set up once per machine. What a file says to do is
-// @cmdless/launch-tray's business: add and open only make sure the shim is
-// there, then pass the file on to it.
+// @cmdless/launch-tray's business: add and open make sure the shim is there,
+// read the file, and hand its launch to the tray through LaunchHost.
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import { acquireLock, getCmdlessRoot, resolveNewestPackageBin } from '@cmdless/ui-sdk/node';
+import { parseLaunch } from '@cmdless/ui-sdk';
+import { acquireLock, getCmdlessRoot } from '@cmdless/ui-sdk/node';
 import { installLinux, linuxInstalled } from './launch-linux.js';
 import { installMacOS, macOSInstalled } from './launch-macos.js';
 import { installWindows, windowsInstalled } from './launch-windows.js';
@@ -70,20 +70,9 @@ export async function ensureLauncher(version: string) {
   }
 }
 
-// Passes a file on to @cmdless/launch-tray - whichever version is newest
-// here, installing the latest only when there's none. It's started detached:
-// it either becomes the tray, or hands the file to the one that's running.
-export async function forward(command: 'add' | 'open', file: string) {
-  const { binPath, env } = await resolveNewestPackageBin(import.meta, '@cmdless/launch-tray');
-  const child = spawn(process.execPath, [binPath, command, path.resolve(file)], {
-    env, detached: true, stdio: 'ignore', windowsHide: true,
-  });
-  await new Promise<void>((resolve, reject) => {
-    child.once('spawn', resolve);
-    child.once('error', reject);
-  });
-  child.unref();
-}
+// a .cmdless file's launch, read and checked now - nothing reads the file
+// after this
+export const readLaunch = (file: string) => parseLaunch(fs.readFileSync(file, 'utf8'));
 
 // a line in the launcher's log - what open says, since nothing it's run
 // from shows its output
